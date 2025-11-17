@@ -1,0 +1,4 @@
+.env
+__pycache__
+active_users.json
+logs/
