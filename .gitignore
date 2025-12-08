@@ -2,3 +2,4 @@
 __pycache__
 active_users.json
 logs/
+.venv
