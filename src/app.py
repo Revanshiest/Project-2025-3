@@ -199,7 +199,9 @@ async def cmd_glossary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 		
 		for part in glossary_parts:
 			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-	app.run_polling()
+
+
+
 
 def main() -> None:
 	token = get_bot_token()
