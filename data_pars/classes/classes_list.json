@@ -1,0 +1,106 @@
+{
+    "Воин": {
+      "name_en": "Fighter",
+      "description": "Мастер боя, обученный владению оружием и доспехами.",
+      "hit_dice": "1d10",
+      "primary_ability": "Сила или Ловкость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Варвар": {
+      "name_en": "Barbarian",
+      "description": "Свирепый воин, использующий ярость в бою.",
+      "hit_dice": "1d12",
+      "primary_ability": "Сила",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Бард": {
+      "name_en": "Bard",
+      "description": "Харизматичный воин, использующий музыку и слова в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Харизма",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Жрец": {
+      "name_en": "Cleric",
+      "description": "Бог-хранитель, использующий магию в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Волшебник": {
+      "name_en": "Wizard",
+      "description": "Магический воин, использующий заклинания в бою.",
+      "hit_dice": "1d6",
+      "primary_ability": "Интеллект",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Плут": {
+      "name_en": "Rogue",
+      "description": "Хитрый воин, использующий завуалированные действия в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Ловкость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Друид": {
+      "name_en": "Druid",
+      "description": "Священный воин, использующий природу в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Паладин": {
+      "name_en": "Paladin",
+      "description": "Священный воин, использующий природу в бою.",
+      "hit_dice": "1d10",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Изобретатель": {
+      "name_en": "Inventor",
+      "description": "Изобретатель, использующий свои изобретения в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Интеллект",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Следопыт": {
+      "name_en": "Ranger",
+      "description": "Рейнджер, использующий свою природу в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Колдун": {
+      "name_en": "Warlock",
+      "description": "Колдун, использующий свою природу в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Монах": {
+      "name_en": "Monk",
+      "description": "Монах, использующий свою природу в бою.",
+      "hit_dice": "1d8",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    },
+    "Чародей": {
+      "name_en": "Sorcerer",
+      "description": "Чародей, использующий свою природу в бою.",
+      "hit_dice": "1d6",
+      "primary_ability": "Мудрость",
+      "role": "Боец",
+      "complexity": "Простой"
+    }
+  }
