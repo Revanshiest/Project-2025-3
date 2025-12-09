@@ -75,33 +75,54 @@ class UserSession:
         return session.get("section", "rules"), session.get("content", RULES_TEXT)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    
 	"""Обработчик обычных текстовых сообщений через Ollama"""
 	if not update.message or not update.message.text:
 		return
-    
+
 	user_id = update.effective_user.id
 	# Получаем текущий раздел пользователя
 	user_message = update.message.text
 
 	section_name, section_content = UserSession(user_id).get_current_section()
 
-    # Показываем индикатор набора текста
+	# Определяем использовать ли RAG
+	use_rag = section_name in ["races", "spells"]
+	rag_section_type = section_name if use_rag else ""
+
 	await update.message.chat.send_action("typing")
-    
-    # Получаем ответ от Ollama (в контексте раздела "Основные правила")
+
 	response = ollama_client.generate_response(
-        user_message=user_message,
-        section_name=section_name,
-        section_content=section_content
-    )
-    
+		user_message=user_message,
+		section_name=section_name,
+		section_content=section_content,
+		use_rag=use_rag,
+		rag_section_type=rag_section_type
+	)
+
 	if response:
 		await update.message.reply_text(response, parse_mode=ParseMode.HTML)
 	else:
-	    await update.message.reply_text(
-            "❌ Не удалось получить ответ. Проверь подключение к Ollama."
-        )
+		await update.message.reply_text(
+			"❌ Не удалось получить ответ. Проверь подключение к Ollama."
+		)
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+	if update.message:
+		await update.message.reply_text(START_TEXT)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+	if update.message:
+		await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
+
+
+async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+	if update.message and update.effective_user:
+		user_id = update.effective_user.id
+		# Сохраняем текущий раздел пользователя
+		session = UserSession(user_id)
+		session.set_section("rules", RULES_TEXT)
+		await update.message.reply_text(RULES_TEXT, parse_mode=ParseMode.HTML)
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 	if update.message:
@@ -178,7 +199,7 @@ async def cmd_glossary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 		
 		for part in glossary_parts:
 			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-
+	app.run_polling()
 
 def main() -> None:
 	token = get_bot_token()
@@ -191,8 +212,9 @@ def main() -> None:
 	app.add_handler(CommandHandler("dice", cmd_dice))
 	app.add_handler(CommandHandler("combat", cmd_combat))
 	app.add_handler(CommandHandler("stats", cmd_stats))
+	app.add_handler(CommandHandler("glossary", cmd_glossary))
 
-	app.add_handler(MessageHandler(handle_message))
+	app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 	print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
 	app.run_polling()
