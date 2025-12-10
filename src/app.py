@@ -1,32 +1,13 @@
 import os
-from typing import Final
+from typing import Final, Dict, List, Optional
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
-from telegram.ext import MessageHandler, filters, CallbackQueryHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import MessageHandler, filters, CallbackQueryHandler, Application, ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, KeyboardButton, ReplyKeyboardMarkup, Update
 from .ollama import OllamaClient
 from dotenv import load_dotenv
-from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
-
-from .texts import (
-	START_TEXT, 
-	HELP_TEXT, 
-	RULES_TEXT, 
-	DICE_RULES_TEXT,
-	COMBAT_RULES_TEXT_PART1,
-	COMBAT_RULES_TEXT_PART2,
-	COMBAT_RULES_TEXT_PART3,
-	COMBAT_RULES_TEXT_PART4,
-	STATS_TEXT_PART1,
-	STATS_TEXT_PART2,
-	GLOSSARY_TEXT_PART1,
-	GLOSSARY_TEXT_PART2,
-	RACES_SHORT_DESCRIPTIONS
-)
-
+from .texts import *
 
 ollama_client = OllamaClient()
 RACES_DATA = {}
@@ -50,10 +31,6 @@ def load_races_data() -> dict:
 
 
 def load_races_formatted_text() -> tuple[str, list[str]]:
-    """
-    Загрузить отформатированный текст рас и первые три названия для кнопок.
-    Возвращает текст целиком и список первых трёх рас.
-    """
     races_file = Path(__file__).parent.parent / "data_pars" / "races_descriptions_formatted.txt"
     try:
         raw_text = races_file.read_text(encoding="utf-8").strip()
@@ -74,15 +51,44 @@ def load_races_formatted_text() -> tuple[str, list[str]]:
 
 
 def load_races_formatted_lines() -> list[tuple[str, str]]:
-    """
-    Прочитать отформатированный список рас и вернуть пары (имя, описание-строка).
-    Используется для пагинации списка рас.
-    """
     races_file = Path(__file__).parent.parent / "data_pars" / "races_descriptions_formatted.txt"
+    
+    # Проверяем существование файла
+    if not races_file.exists():
+        # Попробуем альтернативный путь или создать базовый список
+        races_data = load_races_data()
+        if races_data:
+            # Используем данные из JSON, если файл txt не найден
+            lines: list[tuple[str, str]] = []
+            for race_key, race_info in races_data.items():
+                # Извлекаем русское название из ключа
+                race_name = race_key
+                for i, char in enumerate(race_key):
+                    if 'A' <= char <= 'z':  # Нашли английскую букву
+                        race_name = race_key[:i].strip()
+                        break
+                # Берем первое поле как описание
+                description = ""
+                if race_info:
+                    first_key = next(iter(race_info), "")
+                    first_value = race_info.get(first_key, "")
+                    if isinstance(first_value, list):
+                        description = first_value[0] if first_value else ""
+                    else:
+                        description = str(first_value)
+                
+                lines.append((race_name, description[:50] + "..." if len(description) > 50 else description))
+            return lines
+        return []
+    
     try:
         raw_text = races_file.read_text(encoding="utf-8").strip()
+        if not raw_text:
+            print(f"❌ Файл пустой: {races_file}")
+            return []
+            
     except Exception as e:
-        print(f"❌ Ошибка чтения races_descriptions_formatted.txt: {e}")
+        print(f"❌ Ошибка чтения {races_file}: {e}")
         return []
 
     lines: list[tuple[str, str]] = []
@@ -92,7 +98,10 @@ def load_races_formatted_lines() -> list[tuple[str, str]]:
         name, _, desc = line.partition(" -")
         name = name.lstrip("\ufeff").strip()
         desc = desc.strip(" -")
-        lines.append((name, desc))
+        if name:  # Добавляем только если есть имя
+            lines.append((name, desc))
+    
+    print(f"✅ Загружено рас: {len(lines)}")
     return lines
 
 
@@ -110,13 +119,22 @@ def resolve_race_key(display_name: str) -> str | None:
     return None
 
 
-def build_races_page(page: int, page_size: int = 5) -> tuple[str, InlineKeyboardMarkup]:
+def build_races_page(page: int, page_size: int = 10) -> tuple[str, InlineKeyboardMarkup]:
     """
     Сформировать текст и инлайн-клавиатуру для страницы списка рас.
     """
     load_races_data()
     races = load_races_formatted_lines()
     total = len(races)
+    
+    if total == 0:
+        text = "🧝 <b>Расы D&D 5e</b>\n\n"
+        text += "❌ <b>Расы не найдены!</b>\n\n"
+        text += "Пожалуйста, проверьте наличие файлов с данными."
+        
+        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="race_page_1")]]
+        return text, InlineKeyboardMarkup(keyboard)
+    
     total_pages = max(1, (total + page_size - 1) // page_size)
     current_page = min(max(1, page), total_pages)
 
@@ -124,30 +142,146 @@ def build_races_page(page: int, page_size: int = 5) -> tuple[str, InlineKeyboard
     end = start + page_size
     slice_races = races[start:end]
 
-    text_parts = [f"🎭 Доступные расы (стр. {current_page}/{total_pages})\n"]
-    for name, desc in slice_races:
-        text_parts.append(f"• {name} — {desc}")
-    text = "\n".join(text_parts)
+    # Только заголовок без списка рас
+    text = f"🧝 <b>Расы D&D 5e</b>\n"
+    text += f"Страница {current_page}/{total_pages} • Всего: {total}\n\n"
+    text += "Выберите расу для подробной информации:\n"
 
     keyboard: list[list[InlineKeyboardButton]] = []
     for name, _ in slice_races:
         race_key = resolve_race_key(name)
         if race_key:
-            keyboard.append([InlineKeyboardButton(text=name, callback_data=f"race_{race_key}")])
+            # Используем короткий callback_data для экономии места
+            callback_data = f"race_detail_{race_key[:20]}" if len(race_key) > 20 else f"race_detail_{race_key}"
+            keyboard.append([InlineKeyboardButton(text=name, callback_data=callback_data)])
         else:
-            keyboard.append([InlineKeyboardButton(text=name, callback_data="race_noop")])
+            # Если не нашли ключ, все равно создаем кнопку
+            keyboard.append([InlineKeyboardButton(text=name, callback_data=f"race_detail_{name}")])
 
-    # Навигация: предыдущая / индикатор / следующая
-    prev_page = current_page - 1 if current_page > 1 else current_page
-    next_page = current_page + 1 if current_page < total_pages else current_page
-
+    # Навигация (без кнопки с номером страницы)
     nav_row: list[InlineKeyboardButton] = []
-    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"race_page_{prev_page}"))
-    nav_row.append(InlineKeyboardButton(f"Стр {current_page}/{total_pages}", callback_data="race_page_info"))
-    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"race_page_{next_page}"))
-    keyboard.append(nav_row)
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Назад", callback_data=f"race_page_{current_page - 1}"))
+    
+    if current_page < total_pages:
+        if nav_row:  # Если уже есть кнопка "Назад", добавляем "Вперед" в тот же ряд
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"race_page_{current_page + 1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"race_page_{current_page + 1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
 
     return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_race_detail_page(race_key: str, page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Сформировать страницу с детальной информацией о расе с пагинацией.
+    Фиксированное количество строк (10-12) на страницу для большего количества страниц.
+    """
+    load_races_data()
+    
+    # Ищем расу в данных
+    race_data = None
+    race_name_display = race_key
+    
+    # Пытаемся найти расу по ключу
+    for key, data in RACES_DATA.items():
+        if key.startswith(race_key) or race_key in key:
+            race_data = data
+            # Извлекаем русское название из ключа
+            for i, char in enumerate(key):
+                if 'A' <= char <= 'z':  # Нашли английскую букву
+                    race_name_display = key[:i].strip()
+                    break
+            break
+    
+    # Если не нашли по ключу, ищем по русскому названию
+    if not race_data:
+        for key, data in RACES_DATA.items():
+            # Извлекаем русское название
+            race_name = key
+            for i, char in enumerate(key):
+                if 'A' <= char <= 'z':
+                    race_name = key[:i].strip()
+                    break
+            
+            if race_name == race_key:
+                race_data = data
+                race_name_display = race_name
+                break
+    
+    if not race_data:
+        return "❌ Информация о расе не найдена", InlineKeyboardMarkup([])
+    
+    # Формируем полный текст
+    full_text = f"🧝 <b>{race_name_display}</b>\n\n"
+    
+    if isinstance(race_data, dict):
+        for section_title, section_content in race_data.items():
+            if isinstance(section_content, list) and section_content:
+                full_text += f"<b>{section_title}:</b>\n"
+                for item in section_content:
+                    full_text += f"• {item}\n"
+                full_text += "\n"
+            elif isinstance(section_content, str) and section_content.strip():
+                full_text += f"<b>{section_title}:</b> {section_content}\n\n"
+    else:
+        # Если данные не в ожидаемом формате
+        full_text += str(race_data)
+    
+    # Разбиваем текст на строки
+    lines = full_text.split('\n')
+    total_lines = len(lines)
+    
+    # ФИКСИРОВАННОЕ количество строк на страницу
+    LINES_PER_PAGE = 12
+    
+    # Вычисляем общее количество страниц
+    total_pages = max(1, (total_lines + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
+    current_page = min(max(1, page), total_pages)
+    
+    # Вычисляем диапазон строк для текущей страницы
+    start_line = (current_page - 1) * LINES_PER_PAGE
+    end_line = min(start_line + LINES_PER_PAGE, total_lines)
+    
+    # Формируем текст текущей страницы
+    page_text = '\n'.join(lines[start_line:end_line])
+    
+    # Добавляем информацию о странице
+    page_text += f"\n\n📄 Страница {current_page}/{total_pages}"
+    
+    # Проверяем длину
+    if len(page_text) > 4096:
+        # Если все еще слишком длинный, принудительно укорачиваем
+        page_text = page_text[:4000] + "\n\n📝 <i>Текст продолжается на следующей странице...</i>"
+    
+    # Создаем клавиатуру
+    keyboard: list[list[InlineKeyboardButton]] = []
+    
+    # Кнопки навигации
+    nav_row: list[InlineKeyboardButton] = []
+    
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Назад", 
+                     callback_data=f"race_detail_page_{race_key}_{current_page - 1}"))
+    
+    if current_page < total_pages:
+        if nav_row:
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", 
+                         callback_data=f"race_detail_page_{race_key}_{current_page + 1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", 
+                         callback_data=f"race_detail_page_{race_key}_{current_page + 1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
+    
+    # Кнопка возврата к списку рас
+    keyboard.append([InlineKeyboardButton("🔙 К списку рас", callback_data="race_page_1")])
+    
+    return page_text, InlineKeyboardMarkup(keyboard)
 
 
 def split_message(text: str, limit: int = 4000) -> list[str]:
@@ -210,25 +344,28 @@ def load_spells_by_level(level: str) -> Dict:
 def get_spell_level_display_name(level: str) -> str:
     """Получить отображаемое название уровня заклинаний"""
     if level == "cantrips":
-        return "Кантрипы (Заговоры)"
-    return f"{level} уровень"
+        return "Заговоры"
+    elif level == "1":
+        return "1 уровень"
+    else:
+        return f"{level} уровень"
 
 
 def build_spells_level_selection() -> tuple[str, InlineKeyboardMarkup]:
     """Сформировать экран выбора уровня заклинаний"""
     text = "✨ <b>Выберите уровень заклинаний:</b>\n\n"
-    text += "Кантрипы — базовые заклинания, не требующие ячеек\n"
+    text += "Заговоры — базовые заклинания, не требующие ячеек\n"
     text += "1-9 уровень — заклинания разной силы"
     
     keyboard: list[list[InlineKeyboardButton]] = []
     
-    # Кантрипы
-    keyboard.append([InlineKeyboardButton("✨ Кантрипы", callback_data="spell_level_cantrips")])
+    # Заговоры
+    keyboard.append([InlineKeyboardButton("✨ Заговоры", callback_data="spell_level_cantrips")])
     
-    # Уровни 1-9 в две колонки
+    # Уровни 1-9 в три колонки
     levels_row: list[InlineKeyboardButton] = []
     for i in range(1, 10):
-        levels_row.append(InlineKeyboardButton(f"{i}", callback_data=f"spell_level_{i}"))
+        levels_row.append(InlineKeyboardButton(f"{i} ур.", callback_data=f"spell_level_{i}"))
         if len(levels_row) == 3:
             keyboard.append(levels_row)
             levels_row = []
@@ -238,7 +375,7 @@ def build_spells_level_selection() -> tuple[str, InlineKeyboardMarkup]:
     return text, InlineKeyboardMarkup(keyboard)
 
 
-def build_spells_page(level: str, page: int, page_size: int = 10) -> tuple[str, InlineKeyboardMarkup]:
+def build_spells_page(level: str, page: int = 1, page_size: int = 8) -> tuple[str, InlineKeyboardMarkup]:
     """
     Сформировать текст и инлайн-клавиатуру для страницы списка заклинаний уровня.
     """
@@ -246,6 +383,15 @@ def build_spells_page(level: str, page: int, page_size: int = 10) -> tuple[str, 
     spell_names = sorted(list(spells_data.keys()))
     
     total = len(spell_names)
+    if total == 0:
+        level_name = get_spell_level_display_name(level)
+        text = f"✨ <b>{level_name}</b>\n\n"
+        text += "❌ Заклинания этого уровня не найдены"
+        
+        keyboard: list[list[InlineKeyboardButton]] = []
+        keyboard.append([InlineKeyboardButton("🔙 К выбору уровня", callback_data="spell_level_select")])
+        return text, InlineKeyboardMarkup(keyboard)
+    
     total_pages = max(1, (total + page_size - 1) // page_size)
     current_page = min(max(1, page), total_pages)
     
@@ -254,42 +400,52 @@ def build_spells_page(level: str, page: int, page_size: int = 10) -> tuple[str, 
     slice_spells = spell_names[start:end]
     
     level_name = get_spell_level_display_name(level)
-    text_parts = [f"✨ <b>{level_name}</b> (стр. {current_page}/{total_pages})\n"]
-    text_parts.append(f"Всего заклинаний: {total}\n")
-    
-    for name in slice_spells:
-        text_parts.append(f"• {name}")
-    text = "\n".join(text_parts)
+    text = f"✨ <b>{level_name}</b>\n"
+    text += f"Страница {current_page}/{total_pages} • Всего: {total}\n\n"
+    text += "Выберите заклинание для подробной информации:"
     
     keyboard: list[list[InlineKeyboardButton]] = []
     
     # Кнопки заклинаний (по 2 в ряд для компактности)
-    # Используем индекс вместо имени для callback_data, чтобы избежать проблем с длиной и символами
+    # Сохраняем номер страницы в callback_data для возврата
     spell_row: list[InlineKeyboardButton] = []
     for idx, name in enumerate(slice_spells):
         # Используем глобальный индекс в отсортированном списке
         global_idx = start + idx
-        # Формат: spell_level_index (например: spell_1_5, spell_cantrips_12)
-        # Это гарантирует короткий и безопасный callback_data
-        callback_data = f"spell_{level}_{global_idx}"
+        
+        # Формат: spell_detail_{level}_{index}_{current_page}
+        callback_data = f"spell_detail_{level}_{global_idx}_{current_page}"
+        
         # Ограничиваем текст кнопки для читаемости
-        button_text = name[:25] + "..." if len(name) > 25 else name
+        button_text = name
+        if len(name) > 25:
+            # Находим последний пробел до 25 символов
+            cutoff = 22
+            if ' ' in name[:25]:
+                # Находим последний пробел до 25 символов
+                cutoff = name[:25].rfind(' ')
+                if cutoff < 15:  # Если последний пробел слишком рано
+                    cutoff = 22
+            button_text = name[:cutoff] + "..."
+        
         spell_row.append(InlineKeyboardButton(text=button_text, callback_data=callback_data))
         if len(spell_row) == 2:
             keyboard.append(spell_row)
             spell_row = []
+    
     if spell_row:
         keyboard.append(spell_row)
     
-    # Навигация: предыдущая / индикатор / следующая
-    prev_page = current_page - 1 if current_page > 1 else current_page
-    next_page = current_page + 1 if current_page < total_pages else current_page
-    
+    # Навигация (без кнопки с номером страницы)
     nav_row: list[InlineKeyboardButton] = []
-    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"spell_page_{level}_{prev_page}"))
-    nav_row.append(InlineKeyboardButton(f"Стр {current_page}/{total_pages}", callback_data="spell_page_info"))
-    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"spell_page_{level}_{next_page}"))
-    keyboard.append(nav_row)
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Назад", callback_data=f"spell_page_{level}_{current_page - 1}"))
+    
+    if current_page < total_pages:
+        nav_row.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"spell_page_{level}_{current_page + 1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
     
     # Кнопка возврата к выбору уровня
     keyboard.append([InlineKeyboardButton("🔙 К выбору уровня", callback_data="spell_level_select")])
@@ -302,36 +458,47 @@ def format_spell_detail_by_name(level: str, spell_name: str) -> str:
     spells_data = load_spells_by_level(level)
     
     if spell_name not in spells_data:
-        return f"❌ Заклинание не найдено"
+        return f"❌ Заклинание '{spell_name}' не найдено"
     
     spell_data = spells_data[spell_name]
     
     level_name = get_spell_level_display_name(level)
     text_parts = [f"✨ <b>{spell_name}</b>\n"]
-    text_parts.append(f"<i>{level_name}</i>\n")
+    text_parts.append(f"<i>{level_name}</i>\n\n")
     
     # Определяем ключ для уровня и школы
     level_school_key = None
-    for key in ["Уровень и школа", "информация"]:
+    possible_keys = ["Уровень и школа", "информация", "Информация", "Уровень"]
+    for key in possible_keys:
         if key in spell_data:
             level_school_key = key
             break
     
-    if level_school_key:
+    if level_school_key and spell_data[level_school_key]:
         text_parts.append(f"<b>{level_school_key}:</b> {spell_data[level_school_key]}\n")
     
-    # Остальные поля
+    # Остальные поля (кроме описания)
     for key, value in spell_data.items():
-        if key in ["Уровень и школа", "информация", "описание"]:
+        if key in ["Уровень и школа", "информация", "Информация", "Уровень", "описание", "Описание"]:
             continue
-        if isinstance(value, str) and value:
+        
+        if isinstance(value, str) and value.strip():
             text_parts.append(f"<b>{key}:</b> {value}\n")
         elif isinstance(value, list) and value:
-            text_parts.append(f"<b>{key}:</b> {', '.join(str(v) for v in value)}\n")
+            # Фильтруем пустые значения в списке
+            filtered_values = [str(v).strip() for v in value if str(v).strip()]
+            if filtered_values:
+                text_parts.append(f"<b>{key}:</b> {', '.join(filtered_values)}\n")
     
     # Описание в конце
-    if "описание" in spell_data:
-        text_parts.append(f"\n<b>Описание:</b>\n{spell_data['описание']}")
+    desc_key = None
+    for key in ["описание", "Описание", "description"]:
+        if key in spell_data:
+            desc_key = key
+            break
+    
+    if desc_key and spell_data[desc_key]:
+        text_parts.append(f"\n<b>Описание:</b>\n{spell_data[desc_key]}")
     
     return "\n".join(text_parts)
 
@@ -478,55 +645,65 @@ def resolve_class_key(display_name: str) -> Optional[str]:
     
     return None
 
-
-def build_classes_page(page: int, page_size: int = 8) -> tuple[str, InlineKeyboardMarkup]:
-    """Сформировать текст и инлайн-клавиатуру для страницы списка классов"""
+def build_classes_simple_page() -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Упрощенная страница со списком классов - все классы на одной странице
+    """
     classes = load_classes_list()
     total = len(classes)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    current_page = min(max(1, page), total_pages)
     
-    start = (current_page - 1) * page_size
-    end = start + page_size
-    slice_classes = classes[start:end]
+    # Эмодзи для классов
+    class_emojis = {
+        "Воин": "⚔️",
+        "Варвар": "🪓",
+        "Бард": "🎵",
+        "Жрец": "🙏",
+        "Волшебник": "🔮",
+        "Плут": "🗡️",
+        "Друид": "🌿",
+        "Паладин": "🛡️",
+        "Изобретатель": "⚙️",
+        "Следопыт": "🏹",
+        "Колдун": "👁️",
+        "Монах": "🥋",
+        "Чародей": "✨"
+    }
     
-    text_parts = [f"⚔️ <b>Доступные классы</b> (стр. {current_page}/{total_pages})\n"]
-    text_parts.append(f"Всего классов: {total}\n")
+    # Формируем текст
+    text = f"<b>⚔️ Классы D&D 5e</b>\n"
+    text += f"<i>Всего классов: {total}</i>\n\n"
+    text += "Выберите класс для подробной информации:"
     
-    for name in slice_classes:
-        text_parts.append(f"• {name}")
-    text = "\n".join(text_parts)
+    # Создаем клавиатуру
+    keyboard = []
     
-    keyboard: list[list[InlineKeyboardButton]] = []
-    
-    # Кнопки классов (по 2 в ряд для компактности)
-    class_row: list[InlineKeyboardButton] = []
-    for name in slice_classes:
-        class_key = resolve_class_key(name)
+    # Кнопки классов (в 2 столбца)
+    row = []
+    for i, class_name in enumerate(classes, 1):
+        emoji = class_emojis.get(class_name, "🎭")
+        button_text = f"{emoji} {class_name}"
+        
+        # Получаем ключ класса
+        class_key = resolve_class_key(class_name)
         if class_key:
-            # Используем короткий ID вместо полного ключа
+            # Используем короткий ID
             short_id = _register_class_key(class_key)
-            callback_data = f"class_{short_id}"
-            button_text = name[:20] + "..." if len(name) > 20 else name
-            class_row.append(InlineKeyboardButton(text=button_text, callback_data=callback_data))
-            if len(class_row) == 2:
-                keyboard.append(class_row)
-                class_row = []
-    if class_row:
-        keyboard.append(class_row)
+            callback_data = f"cls_{short_id}_m_1"  # Формат для перехода сразу в основную секцию
+        else:
+            callback_data = f"class_{class_name}"
+        
+        row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
+        
+        # Добавляем новую строку после каждого второго элемента
+        if i % 2 == 0:
+            keyboard.append(row)
+            row = []
     
-    # Навигация
-    prev_page = current_page - 1 if current_page > 1 else current_page
-    next_page = current_page + 1 if current_page < total_pages else current_page
-    
-    nav_row: list[InlineKeyboardButton] = []
-    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"class_page_{prev_page}"))
-    nav_row.append(InlineKeyboardButton(f"Стр {current_page}/{total_pages}", callback_data="class_page_info"))
-    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"class_page_{next_page}"))
-    keyboard.append(nav_row)
+    # Если остались недобавленные кнопки (нечетное количество классов)
+    if row:
+        keyboard.append(row)
     
     return text, InlineKeyboardMarkup(keyboard)
-
 
 def format_class_detail(class_key: str, section: str = "main", page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
     """Форматировать детальную информацию о классе с пагинацией"""
@@ -657,13 +834,12 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация
+            # Навигация (без кнопки с номером страницы)
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
         
@@ -676,13 +852,12 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             text_parts.append(parts[current_page - 1])
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация
+            # Навигация (без кнопки с номером страницы)
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
     
@@ -711,7 +886,6 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             page_archetypes = archetype_list[start:end]
             
             for arch_name, arch_data in page_archetypes:
-                text_parts.append(f"<b>🎭 {arch_name}</b>\n")
                 if isinstance(arch_data, dict):
                     if "Описание" in arch_data:
                         desc = arch_data["Описание"]
@@ -721,17 +895,15 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
                                 text_parts.append(f"{desc_text}\n")
                         elif isinstance(desc, str):
                             text_parts.append(f"{desc[:500]}...\n" if len(desc) > 500 else f"{desc}\n")
-                text_parts.append("")
             
             text_parts.append(f"<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация
+            # Навигация (без кнопки с номером страницы)
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_r_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_r_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_r_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_r_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
     
@@ -755,14 +927,13 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация - используем короткое имя секции (первые 3 символа)
+            # Навигация - используем короткое имя секции (без кнопки с номером страницы)
             section_short = section[:3].lower() if len(section) >= 3 else section.lower()
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
         
@@ -774,22 +945,217 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             text_parts.append(parts[current_page - 1])
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация - используем короткое имя секции (первые 3 символа)
+            # Навигация - используем короткое имя секции (без кнопки с номером страницы)
             section_short = section[:3].lower() if len(section) >= 3 else section.lower()
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
     
-    # Кнопка возврата
-    keyboard.append([InlineKeyboardButton("◀ Назад к классу", callback_data=f"cls_{short_id}_m_1")])
+    # Кнопки навигации в зависимости от секции
+    if section != "main":
+        # В дополнительных секциях добавляем кнопку "Назад к классу"
+        keyboard.append([InlineKeyboardButton("◀️ Назад к классу", callback_data=f"cls_{short_id}_m_1")])
+    
+    # Кнопка возврата к списку классов (добавляется всегда)
     keyboard.append([InlineKeyboardButton("🔙 К списку классов", callback_data="class_page_1")])
     
     return "\n".join(text_parts), InlineKeyboardMarkup(keyboard)
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /start с меню кнопок"""
+    if update.message:
+        # Создаем клавиатуру
+        keyboard = [
+            [KeyboardButton("👤 Создать персонажа"), KeyboardButton("🎲 Броски костей")],
+            [KeyboardButton("⚔️ Боевая система"), KeyboardButton("📊 Характеристики")],
+            [KeyboardButton("📚 Глоссарий"), KeyboardButton("❓ Помощь")],
+			[KeyboardButton("👀 Классы"), KeyboardButton("👥 Расы")],
+			[KeyboardButton("🔮 Заклинания")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            START_TEXT,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+
+async def handle_reply_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик нажатий на кнопки Reply-клавиатуры"""
+    if not update.message or not update.message.text:
+        return
+    
+    text = update.message.text
+    user_id = update.effective_user.id
+    
+    if text == "👤 Создать персонажа":
+        await update.message.reply_text("Функция создания персонажа в разработке...")
+        
+    elif text == "🎲 Броски костей":
+        session = UserSession(user_id)
+        session.set_section("dice", DICE_RULES_TEXT_PART1 + DICE_RULES_TEXT_PART2 + DICE_RULES_TEXT_PART3 + DICE_RULES_TEXT_PART4 + DICE_RULES_TEXT_PART5)
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="dice_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"🎲 <b>Броски костей (1/5):</b>\n\n{DICE_RULES_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "⚔️ Боевая система":
+        session = UserSession(user_id)
+        session.set_section("combat", 
+            COMBAT_RULES_TEXT_PART1 + COMBAT_RULES_TEXT_PART2 + 
+            COMBAT_RULES_TEXT_PART3 + COMBAT_RULES_TEXT_PART4 +
+            COMBAT_RULES_TEXT_PART5 + COMBAT_RULES_TEXT_PART6 +
+            COMBAT_RULES_TEXT_PART7
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="combat_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"⚔️ <b>Боевая система (1/7):</b>\n\n{COMBAT_RULES_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "📊 Характеристики":
+        session = UserSession(user_id)
+        session.set_section("stats", 
+            STATS_TEXT_PART1 + STATS_TEXT_PART2 + STATS_TEXT_PART3 +
+            STATS_TEXT_PART4 + STATS_TEXT_PART5 + STATS_TEXT_PART6 +
+            STATS_TEXT_PART7 + STATS_TEXT_PART8 + STATS_TEXT_PART9 +
+            STATS_TEXT_PART10
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="stats_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"📊 <b>Характеристики (1/10):</b>\n\n{STATS_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "📚 Глоссарий":
+        session = UserSession(user_id)
+        session.set_section("glossary", 
+            GLOSSARY_TEXT_PART1 + GLOSSARY_TEXT_PART2 + GLOSSARY_TEXT_PART3 +
+            GLOSSARY_TEXT_PART4 + GLOSSARY_TEXT_PART5
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="glossary_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"📚 <b>Глоссарий (1/5):</b>\n\n{GLOSSARY_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "❓ Помощь":
+        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
+    
+    elif text == "👀 Классы":
+        # Вызываем функцию для отображения классов
+        await cmd_classes(update, context)
+        
+    elif text == "👥 Расы":
+        # Вызываем функцию для отображения рас
+        await cmd_races(update, context)
+        
+    elif text == "🔮 Заклинания":
+        # Вызываем функцию для отображения заклинаний
+        await cmd_spells(update, context)
+
+async def handle_inline_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик inline-кнопок для всех разделов"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Вспомогательные функции для создания кнопок
+    def create_nav_buttons(current: int, total: int, prefix: str):
+        """Создает кнопки навигации"""
+        buttons = []
+        if current > 0:
+            buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"{prefix}_{current-1}"))
+        if current < total - 1:
+            buttons.append(InlineKeyboardButton("Далее ➡️", callback_data=f"{prefix}_{current+1}"))
+        return [buttons] if buttons else []
+    
+    # Обработка для Основных правил
+    if query.data.startswith("rules_"):
+        part_num = int(query.data.split("_")[1])
+        total_parts = 3
+        parts = [RULES_TEXT_PART1, RULES_TEXT_PART2, RULES_TEXT_PART3]
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "rules"))
+        await query.edit_message_text(
+            f"📚 <b>Основные правила ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Бросков костей 
+    elif query.data.startswith("dice_"):
+        part_num = int(query.data.split("_")[1])
+        total_parts = 5
+        parts = [DICE_RULES_TEXT_PART1, DICE_RULES_TEXT_PART2, DICE_RULES_TEXT_PART3, 
+                DICE_RULES_TEXT_PART4, DICE_RULES_TEXT_PART5]
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "dice"))
+        await query.edit_message_text(
+            f"🎲 <b>Броски костей ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Боевой системы 
+    elif query.data.startswith("combat_"):
+        part_num = int(query.data.split("_")[1])
+        total_parts = 7
+        parts = [COMBAT_RULES_TEXT_PART1, COMBAT_RULES_TEXT_PART2, COMBAT_RULES_TEXT_PART3,
+                COMBAT_RULES_TEXT_PART4, COMBAT_RULES_TEXT_PART5, COMBAT_RULES_TEXT_PART6,
+                COMBAT_RULES_TEXT_PART7]
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "combat"))
+        await query.edit_message_text(
+            f"⚔️ <b>Боевая система ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Характеристик
+    elif query.data.startswith("stats_"):
+        part_num = int(query.data.split("_")[1])
+        total_parts = 10
+        parts = [STATS_TEXT_PART1, STATS_TEXT_PART2, STATS_TEXT_PART3, STATS_TEXT_PART4,
+                STATS_TEXT_PART5, STATS_TEXT_PART6, STATS_TEXT_PART7, STATS_TEXT_PART8,
+                STATS_TEXT_PART9, STATS_TEXT_PART10]
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "stats"))
+        await query.edit_message_text(
+            f"📊 <b>Характеристики ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Глоссария 
+    elif query.data.startswith("glossary_"):
+        part_num = int(query.data.split("_")[1])
+        total_parts = 5
+        parts = [GLOSSARY_TEXT_PART1, GLOSSARY_TEXT_PART2, GLOSSARY_TEXT_PART3,
+                GLOSSARY_TEXT_PART4, GLOSSARY_TEXT_PART5]
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "glossary"))
+        await query.edit_message_text(
+            f"📚 <b>Глоссарий ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 def load_env() -> None:
 	load_dotenv()
@@ -811,7 +1177,7 @@ class UserSession:
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.current_section = "rules"  # по умолчанию раздел "Основные правила"
-        self.section_content = RULES_TEXT
+        self.section_content = RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3
     
     @staticmethod
     def get_or_create(user_id: int) -> "UserSession":
@@ -819,7 +1185,7 @@ class UserSession:
         if user_id not in user_sessions:
             user_sessions[user_id] = {
                 "section": "rules",
-                "content": RULES_TEXT
+                "content": RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3
             }
         return user_sessions.get(user_id)
     
@@ -834,9 +1200,9 @@ class UserSession:
         """Получить название и содержимое текущего раздела"""
         session = user_sessions.get(self.user_id, {
             "section": "rules",
-            "content": RULES_TEXT
+            "content": RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3
         })
-        return session.get("section", "rules"), session.get("content", RULES_TEXT)
+        return session.get("section", "rules"), session.get("content", RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 	"""Обработчик обычных текстовых сообщений через Ollama"""
@@ -881,99 +1247,105 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 			"❌ Не удалось получить ответ. Проверь подключение к Ollama."
 		)
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(START_TEXT)
-
-
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
-
+    if update.message:
+        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
 
 async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("rules", RULES_TEXT)
-		await update.message.reply_text(RULES_TEXT, parse_mode=ParseMode.HTML)
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(START_TEXT)
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
-
-
-async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("rules", RULES_TEXT)
-		await update.message.reply_text(RULES_TEXT, parse_mode=ParseMode.HTML)
-
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("rules", RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3)
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="rules_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            RULES_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_dice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("dice", DICE_RULES_TEXT)
-		await update.message.reply_text(DICE_RULES_TEXT, parse_mode=ParseMode.HTML)
-
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("dice", DICE_RULES_TEXT_PART1 + DICE_RULES_TEXT_PART2 + DICE_RULES_TEXT_PART3 + DICE_RULES_TEXT_PART4 + DICE_RULES_TEXT_PART5)
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="dice_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            DICE_RULES_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_combat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("combat", COMBAT_RULES_TEXT_PART1 + COMBAT_RULES_TEXT_PART2 + COMBAT_RULES_TEXT_PART3 + COMBAT_RULES_TEXT_PART4)
-		# Split large text into multiple messages
-		combat_parts = [
-			COMBAT_RULES_TEXT_PART1,
-			COMBAT_RULES_TEXT_PART2,
-			COMBAT_RULES_TEXT_PART3,
-			COMBAT_RULES_TEXT_PART4
-		]
-		
-		for part in combat_parts:
-			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("combat", 
+            COMBAT_RULES_TEXT_PART1 + COMBAT_RULES_TEXT_PART2 + 
+            COMBAT_RULES_TEXT_PART3 + COMBAT_RULES_TEXT_PART4 +
+            COMBAT_RULES_TEXT_PART5 + COMBAT_RULES_TEXT_PART6 +
+            COMBAT_RULES_TEXT_PART7
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="combat_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            COMBAT_RULES_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("stats", STATS_TEXT_PART1 + STATS_TEXT_PART2)
-		# Split large text into multiple messages
-		combat_parts = [
-			STATS_TEXT_PART1,
-			STATS_TEXT_PART2,
-		]
-		
-		for part in combat_parts:
-			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("stats", 
+            STATS_TEXT_PART1 + STATS_TEXT_PART2 + STATS_TEXT_PART3 +
+            STATS_TEXT_PART4 + STATS_TEXT_PART5 + STATS_TEXT_PART6 +
+            STATS_TEXT_PART7 + STATS_TEXT_PART8 + STATS_TEXT_PART9 +
+            STATS_TEXT_PART10
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="stats_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            STATS_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_glossary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("glossary", GLOSSARY_TEXT_PART1 + GLOSSARY_TEXT_PART2)
-		# Split large text into multiple messages
-		glossary_parts = [
-			GLOSSARY_TEXT_PART1,
-			GLOSSARY_TEXT_PART2,
-		]
-		
-		for part in glossary_parts:
-			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("glossary", 
+            GLOSSARY_TEXT_PART1 + GLOSSARY_TEXT_PART2 + GLOSSARY_TEXT_PART3 +
+            GLOSSARY_TEXT_PART4 + GLOSSARY_TEXT_PART5
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="glossary_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            GLOSSARY_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+
+async def cmd_classes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /classes - красивый список классов с инлайн-кнопками"""
+    if not update.message:
+        return
+    
+    user_id = update.effective_user.id
+    session = UserSession(user_id)
+    session.set_section("classes", "")
+
+    # Убраны параметры page и page_size
+    text, markup = build_classes_simple_page()
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 async def cmd_races(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Команда /races - список рас с кликабельными названиями"""
@@ -985,8 +1357,7 @@ async def cmd_races(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session.set_section("races", "")
 
     text, markup = build_races_page(page=1)
-    await update.message.reply_text(text, parse_mode=None, reply_markup=markup)
-
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 async def cmd_spells(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Команда /spells - выбор уровня заклинаний"""
@@ -1000,83 +1371,81 @@ async def cmd_spells(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     text, markup = build_spells_level_selection()
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
-
-async def cmd_classes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /classes - список классов"""
-    if not update.message or not update.effective_user:
-        return
-    
-    user_id = update.effective_user.id
-    session = UserSession(user_id)
-    session.set_section("classes", "")
-    
-    text, markup = build_classes_page(page=1)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-
-
 async def race_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик клика на названию расы"""
+    """Обработчик клика на название расы"""
     query = update.callback_query
     await query.answer()
     
-    race_name = query.data.replace("race_", "")
+    data = query.data
     
-    load_races_data()
-    
-    if race_name not in RACES_DATA:
-        await query.edit_message_text("❌ Раса не найдена")
+    if not data.startswith("race_detail_"):
+        await query.edit_message_text("❌ Ошибка: неверный формат данных")
         return
     
-    # Формируем полную информацию о расе
-    race_content = RACES_DATA[race_name]
-    full_text = f"<b>🎭 {race_name}</b>\n\n"
+    race_key_part = data.replace("race_detail_", "")
     
-    for section_title, section_content in race_content.items():
-        if isinstance(section_content, list) and section_content:
-            full_text += f"<b>{section_title}:</b>\n"
-            for item in section_content:
-                full_text += f"{item}\n\n"
-        elif isinstance(section_content, str) and section_content:
-            full_text += f"<b>{section_title}:</b> {section_content}\n\n"
+    # Показываем первую страницу детальной информации
+    text, markup = build_race_detail_page(race_key_part, page=1)
     
-    # Разбиваем если больше 4096 символов
-    max_length = 4096
-    if len(full_text) > max_length:
-        parts = []
-        current_part = ""
-        
-        for paragraph in full_text.split("\n\n"):
-            if len(current_part) + len(paragraph) + 2 < max_length:
-                current_part += paragraph + "\n\n"
-            else:
-                if current_part:
-                    parts.append(current_part)
-                current_part = paragraph + "\n\n"
-        
-        if current_part:
-            parts.append(current_part)
-        
-        await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML)
-        
-        for part in parts[1:]:
-            await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+    # Проверяем длину текста и разбиваем при необходимости
+    if len(text) > 4096:
+        # Разбиваем текст на части
+        parts = split_message(text)
+        if parts:
+            # Отправляем первую часть с кнопками
+            await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
+            # Остальные части без кнопок
+            for part in parts[1:]:
+                await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text("❌ Ошибка: текст слишком длинный", parse_mode=ParseMode.HTML)
     else:
-        await query.edit_message_text(full_text, parse_mode=ParseMode.HTML)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def race_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Пагинация списка рас"""
+    """Пагинация списка рас и детальной информации"""
     query = update.callback_query
-    data = query.data.replace("race_page_", "")
-    try:
-        page = int(data)
-    except ValueError:
-        page = 1
-
-    text, markup = build_races_page(page=page)
     await query.answer()
-    await query.edit_message_text(text, reply_markup=markup, parse_mode=None)
+    
+    data = query.data
+    
+    if data.startswith("race_page_"):
+        try:
+            page = int(data.replace("race_page_", ""))
+        except ValueError:
+            page = 1
 
+        text, markup = build_races_page(page=page)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    elif data.startswith("race_detail_page_"):
+        # Пагинация внутри детальной информации о расе
+        parts = data.replace("race_detail_page_", "").split("_")
+        if len(parts) >= 2:
+            try:
+                page = int(parts[-1])
+                # Собираем ключ расы (может содержать подчеркивания)
+                race_key_parts = parts[:-1]
+                race_key = "_".join(race_key_parts)
+                
+                text, markup = build_race_detail_page(race_key, page=page)
+                
+                # Проверяем длину текста и разбиваем при необходимости
+                if len(text) > 4096:
+                    # Разбиваем текст на части
+                    message_parts = split_message(text)
+                    if message_parts:
+                        # Отправляем первую часть с кнопками
+                        await query.edit_message_text(message_parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
+                        # Остальные части без кнопок
+                        for part in message_parts[1:]:
+                            await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+                    else:
+                        await query.edit_message_text("❌ Ошибка: текст слишком длинный", parse_mode=ParseMode.HTML)
+                else:
+                    await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+            except ValueError:
+                await query.edit_message_text("❌ Ошибка пагинации")
 
 # ========== ОБРАБОТЧИКИ ДЛЯ ЗАКЛИНАНИЙ ==========
 
@@ -1094,42 +1463,43 @@ async def spell_level_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    level = query.data.replace("spell_level_", "")
+    data = query.data
     
-    # Если это просто выбор уровня, показываем первую страницу списка
-    if level != "select":
-        text, markup = build_spells_page(level=level, page=1)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    else:
+    if data == "spell_level_select":
         # Возврат к выбору уровня
         text, markup = build_spells_level_selection()
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif data.startswith("spell_level_"):
+        # Выбор конкретного уровня
+        level = data.replace("spell_level_", "")
+        text, markup = build_spells_page(level=level, page=1)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def spell_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Пагинация списка заклинаний"""
     query = update.callback_query
-    data = query.data.replace("spell_page_", "")
-    
-    if data == "info":
-        await query.answer("Информация о текущей странице")
-        return
-    
-    # Формат: level_page или level_1, level_2, etc.
-    parts = data.split("_", 1)
-    if len(parts) != 2:
-        await query.answer("❌ Ошибка навигации")
-        return
-    
-    level = parts[0]
-    try:
-        page = int(parts[1])
-    except ValueError:
-        page = 1
-    
-    text, markup = build_spells_page(level=level, page=page)
     await query.answer()
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    
+    data = query.data
+    
+    # Формат: spell_page_{level}_{page}
+    if data.startswith("spell_page_"):
+        data_parts = data.replace("spell_page_", "")
+        parts = data_parts.split("_")
+        
+        if len(parts) < 2:
+            await query.answer("❌ Ошибка навигации")
+            return
+        
+        level = parts[0]
+        try:
+            page = int(parts[1])
+        except ValueError:
+            page = 1
+        
+        text, markup = build_spells_page(level=level, page=page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1137,19 +1507,20 @@ async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     
-    # Формат: spell_level_index (например: spell_1_5)
-    data = query.data.replace("spell_", "")
-    parts = data.split("_", 1)
+    # Формат: spell_detail_{level}_{index}_{current_page}
+    data = query.data.replace("spell_detail_", "")
+    parts = data.split("_")
     
-    if len(parts) != 2:
-        await query.edit_message_text("❌ Ошибка: заклинание не найдено")
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Ошибка: неверный формат данных")
         return
     
     level = parts[0]
     try:
         spell_index = int(parts[1])
+        return_page = int(parts[2])  # Страница, с которой пришли
     except ValueError:
-        await query.edit_message_text("❌ Ошибка: неверный индекс заклинания")
+        await query.edit_message_text("❌ Ошибка: неверные параметры")
         return
     
     # Получаем список заклинаний и находим по индексу
@@ -1165,14 +1536,14 @@ async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Кнопки навигации
     keyboard: list[list[InlineKeyboardButton]] = []
-    keyboard.append([InlineKeyboardButton("◀ Назад к списку", callback_data=f"spell_page_{level}_1")])
+    keyboard.append([InlineKeyboardButton("◀️ Назад к списку", callback_data=f"spell_page_{level}_{return_page}")])
     keyboard.append([InlineKeyboardButton("🔙 К выбору уровня", callback_data="spell_level_select")])
     
     markup = InlineKeyboardMarkup(keyboard)
     
-    # Разбиваем если слишком длинное
-    if len(detail_text) > 4096:
-        parts = split_message(detail_text, limit=4096)
+    # Разбиваем если слишком длинное (Telegram ограничение - 4096 символов)
+    if len(detail_text) > 4000:
+        parts = split_message(detail_text, limit=4000)
         await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
         for part in parts[1:]:
             await query.message.reply_text(part, parse_mode=ParseMode.HTML)
@@ -1182,151 +1553,152 @@ async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ========== ОБРАБОТЧИКИ ДЛЯ КЛАССОВ ==========
 
-async def class_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Пагинация списка классов"""
+
+async def classes_simple_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик упрощенных колбэков для классов"""
     query = update.callback_query
-    data = query.data.replace("class_page_", "")
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith("class_simple_"):
+        # Показ деталей класса
+        short_id = data.replace("class_simple_", "")
+        class_key = _get_class_key_from_id(short_id)
+        
+        if class_key:
+            text, markup = format_class_simple_detail(class_key)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            await query.edit_message_text("❌ Класс не найден")
+    
+    elif data.startswith("classes_page_"):
+        # Пагинация - теперь просто показываем список
+        text, markup = build_classes_simple_page()  # Без параметров
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    
+    elif data == "classes_info":
+        # Информация
+        await query.answer("Используйте кнопки для навигации")
+    
+    elif data == "classes_back_simple":
+        # Возврат к списку
+        text, markup = build_classes_simple_page()  # Без параметров
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def class_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик подробной информации о классе"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+	
+    # Формат: cls_{short_id}_{section}_{page}
+    if not data.startswith("cls_"):
+        await query.edit_message_text("❌ Ошибка: неверный формат запроса")
+        return
+    
+    parts = data.replace("cls_", "").split("_")
+    
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Ошибка: неполный запрос")
+        return
+    
+    short_id = parts[0]
+    section_code = parts[1]
+    try:
+        page = int(parts[2])
+    except ValueError:
+        page = 1
+    
+    # Расшифровываем код секции
+    section_map = {
+        "m": "main",
+        "a": "abilities", 
+        "r": "archetypes",
+        "q": "quick_start"
+    }
+    section = section_map.get(section_code, "main")
+    
+    # Получаем полный ключ класса
+    class_key = _get_class_key_from_id(short_id)
+    if not class_key:
+        await query.edit_message_text("❌ Класс не найден")
+        return
+    
+    # Используем вашу существующую функцию format_class_detail
+    try:
+        text, markup = format_class_detail(class_key, section=section, page=page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    except Exception as e:
+        print(f"❌ Ошибка при форматировании класса: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при загрузке информации о классе")
+
+
+async def class_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик для возврата к списку классов"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
     
     if data == "info":
         await query.answer("Информация о текущей странице")
         return
     
-    try:
-        page = int(data)
-    except ValueError:
-        page = 1
-    
-    text, markup = build_classes_page(page=page)
-    await query.answer()
+    # Просто возвращаем к списку классов (без параметров)
+    text, markup = build_classes_simple_page()
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
-async def class_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик клика на класс - показ деталей"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Проверяем формат callback_data
-    if query.data.startswith("cls_"):
-        # Это запрос на детальную секцию (новый формат: cls_{id}_{section}_{page})
-        data_parts = query.data.replace("cls_", "").split("_")
-        if len(data_parts) >= 3:
-            short_id = data_parts[0]
-            section_code = data_parts[1]
-            try:
-                page = int(data_parts[2])
-            except ValueError:
-                page = 1
-            
-            # Расшифровываем код секции
-            section_map = {
-                "a": "abilities",
-                "r": "archetypes", 
-                "q": "quick_start",
-                "m": "main"
-            }
-            section = section_map.get(section_code)
-            
-            # Если это не известная секция, ищем полное имя по коду
-            if not section:
-                # Получаем данные класса для поиска секции
-                class_key_temp = _get_class_key_from_id(short_id)
-                if class_key_temp:
-                    classes_dir = Path(__file__).parent.parent / "data_pars" / "classes"
-                    for json_file in classes_dir.glob("*.json"):
-                        try:
-                            with open(json_file, 'r', encoding='utf-8') as f:
-                                data = json.load(f)
-                                if class_key_temp in data:
-                                    class_data_temp = data[class_key_temp]
-                                    # Ищем секцию, которая начинается с этого кода
-                                    for key in class_data_temp.keys():
-                                        if key.lower().startswith(section_code.lower()):
-                                            section = key
-                                            break
-                                    break
-                        except Exception:
-                            continue
-                
-                # Если не нашли, используем код как есть
-                if not section:
-                    section = section_code
-            
-            # Получаем полный ключ класса
-            class_key = _get_class_key_from_id(short_id)
-            if not class_key:
-                await query.edit_message_text("❌ Класс не найден")
-                return
-        elif len(data_parts) == 1 and data_parts[0] == "info":
-            # Информационный callback
-            await query.answer("Информация о текущей странице")
-            return
-        else:
-            await query.edit_message_text("❌ Ошибка формата запроса")
-            return
-    elif query.data.startswith("class_"):
-        # Старый формат или запрос из списка
-        short_id = query.data.replace("class_", "")
-        class_key = _get_class_key_from_id(short_id)
-        
-        if not class_key:
-            await query.edit_message_text("❌ Класс не найден")
-            return
-        
-        section = "main"
-        page = 1
-    else:
-        await query.edit_message_text("❌ Неизвестный формат запроса")
-        return
-    
-    # Форматируем детали с пагинацией
-    detail_text, markup = format_class_detail(class_key, section=section, page=page)
-    
-    # Разбиваем если слишком длинное (на случай если всё равно не влезло)
-    if len(detail_text) > 4096:
-        parts = split_message(detail_text, limit=4096)
-        await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
-        for part in parts[1:]:
-            await query.message.reply_text(part, parse_mode=ParseMode.HTML)
-    else:
-        await query.edit_message_text(detail_text, parse_mode=ParseMode.HTML, reply_markup=markup)
-
 def main() -> None:
-	token = get_bot_token()
-	app = ApplicationBuilder().token(token).build()
+    token = get_bot_token()
+    app = ApplicationBuilder().token(token).build()
 
-	# Register handlers for D&D helper bot
-	app.add_handler(CommandHandler("start", cmd_start))
-	app.add_handler(CommandHandler("help", cmd_help))
-	app.add_handler(CommandHandler("rules", cmd_rules))
-	app.add_handler(CommandHandler("dice", cmd_dice))
-	app.add_handler(CommandHandler("combat", cmd_combat))
-	app.add_handler(CommandHandler("stats", cmd_stats))
-	app.add_handler(CommandHandler("glossary", cmd_glossary))
-	app.add_handler(CommandHandler("races", cmd_races))
-	app.add_handler(CommandHandler("spells", cmd_spells))
-	app.add_handler(CommandHandler("classes", cmd_classes))
+    # Register handlers for D&D helper bot
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("rules", cmd_rules))
+    app.add_handler(CommandHandler("dice", cmd_dice))
+    app.add_handler(CommandHandler("combat", cmd_combat))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("glossary", cmd_glossary))
+    app.add_handler(CommandHandler("races", cmd_races))
+    app.add_handler(CommandHandler("spells", cmd_spells))
+    app.add_handler(CommandHandler("classes", cmd_classes))
     
-    # Обработчики для пагинации и выбора расы
-	app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_page_"))
-	app.add_handler(CallbackQueryHandler(race_callback, pattern="^race_"))
-	
-	# Обработчики для заклинаний (порядок важен - более специфичные первыми)
-	app.add_handler(CallbackQueryHandler(spell_level_select_callback, pattern="^spell_level_select$"))
-	app.add_handler(CallbackQueryHandler(spell_page_callback, pattern="^spell_page_"))
-	app.add_handler(CallbackQueryHandler(spell_level_callback, pattern="^spell_level_"))
-	# Детали заклинаний - паттерн для формата spell_level_index (например: spell_1_5, spell_cantrips_12)
-	app.add_handler(CallbackQueryHandler(spell_detail_callback, pattern="^spell_(cantrips|[1-9])_\\d+$"))
-	
-	# Обработчики для классов (порядок важен - более специфичные первыми)
-	app.add_handler(CallbackQueryHandler(class_callback, pattern="^cls_"))
-	app.add_handler(CallbackQueryHandler(class_page_callback, pattern="^class_page_"))
-	app.add_handler(CallbackQueryHandler(class_callback, pattern="^class_"))
-
-	app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-	print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
-	app.run_polling()
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, 
+        handle_reply_keyboard
+    ))
+    
+    # Обработчики для кнопок "Далее" в правилах
+    app.add_handler(CallbackQueryHandler(handle_inline_button, pattern="^rules_"))
+    app.add_handler(CallbackQueryHandler(handle_inline_button, pattern="^dice_"))
+    app.add_handler(CallbackQueryHandler(handle_inline_button, pattern="^combat_"))
+    app.add_handler(CallbackQueryHandler(handle_inline_button, pattern="^stats_"))
+    app.add_handler(CallbackQueryHandler(handle_inline_button, pattern="^glossary_"))
+    
+    # Обработчики для пагинации рас
+    app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_page_"))
+    app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_detail_page_"))
+    
+    # Обработчики для классов
+    app.add_handler(CallbackQueryHandler(class_callback, pattern="^cls_"))
+    app.add_handler(CallbackQueryHandler(class_page_callback, pattern="^class_page_"))
+    
+    # Обработчики для заклинаний
+    app.add_handler(CallbackQueryHandler(spell_level_callback, pattern="^spell_level_"))
+    app.add_handler(CallbackQueryHandler(spell_page_callback, pattern="^spell_page_"))
+    app.add_handler(CallbackQueryHandler(spell_detail_callback, pattern="^spell_detail_"))
+    app.add_handler(CallbackQueryHandler(spell_level_select_callback, pattern="^spell_level_select$"))
+    
+    # Обработчики для рас
+    app.add_handler(CallbackQueryHandler(race_callback, pattern="^race_detail_"))
+    
+    print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
+    app.run_polling()
 
 
 if __name__ == "__main__":
