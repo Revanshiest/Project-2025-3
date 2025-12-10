@@ -1323,7 +1323,8 @@ def main() -> None:
 	app.add_handler(CallbackQueryHandler(class_page_callback, pattern="^class_page_"))
 	app.add_handler(CallbackQueryHandler(class_callback, pattern="^class_"))
 
-	app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+	# Handle any non-command text messages via Ollama
+	app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
 	print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
 	app.run_polling()
