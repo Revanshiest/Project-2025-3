@@ -1,5 +1,5 @@
 import requests
-from typing import Optional
+from typing import Optional, List
 import chromadb
 from chromadb.api.types import EmbeddingFunction
 from pathlib import Path
@@ -219,9 +219,44 @@ class OllamaClient:
             traceback.print_exc()
             return ""
     
+    def summarize_messages(self, messages: list[dict], section_name: str, section_content: str) -> str:
+        """
+        Кратко суммирует часть истории, чтобы освободить токены.
+        """
+        history_text = "\n".join([f"{m.get('role','user')}: {m.get('text','')}" for m in messages])
+        prompt = f"""Ты помощник по D&D. Суммаризируй диалог кратко, сохрани факты.
+
+РАЗДЕЛ: {section_name}
+БАЗОВАЯ ИНФОРМАЦИЯ РАЗДЕЛА:
+{section_content}
+
+ИСТОРИЯ:
+{history_text}
+
+Дай короткую выжимку (2-4 предложения) на русском, без оформления HTML."""
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": 0.3
+                },
+                timeout=60
+            )
+            if response.status_code == 200:
+                return response.json().get("response", "").strip()
+        except Exception as e:
+            print(f"⚠️ Ошибка суммаризации: {e}")
+        return ""
+
     def generate_response(self, user_message: str, section_name: str = "",
-                           section_content: str = "", use_rag: bool = False,
-                           rag_section_type: str = "") -> Optional[str]:
+                          section_content: str = "", use_rag: bool = False,
+                          rag_section_type: str = "",
+                          history: Optional[list[dict]] = None,
+                          summary: str = "") -> Optional[str]:
         """
         Генерирует ответ от Ollama с полным контекстом раздела.
         
@@ -236,8 +271,34 @@ class OllamaClient:
         # Получаем контекст из RAG если нужно
         rag_context = ""
         if use_rag:
-            rag_context = self._retrieve_rag_context(user_message, rag_section_type)
+            # Агентный шаг: сначала спросим модель, что искать в БД
+            search_queries = self._generate_search_queries(
+                user_message=user_message,
+                section_name=section_name,
+                section_content=section_content,
+                history=history or [],
+                summary=summary
+            )
+            for q in search_queries:
+                rag_context = self._retrieve_rag_context(q, rag_section_type)
+                if rag_context:
+                    break
+            # Если не нашли — пробуем исходный запрос пользователя
+            if not rag_context:
+                rag_context = self._retrieve_rag_context(user_message, rag_section_type)
         
+        # Формируем блок истории
+        history_lines = []
+        if summary:
+            history_lines.append(f"КРАТКАЯ СВОДКА ПРОШЛОГО ДИАЛОГА:\n{summary}\n")
+        if history:
+            history_lines.append("ПОСЛЕДНИЕ СООБЩЕНИЯ:")
+            for msg in history:
+                role = msg.get("role", "user")
+                text = msg.get("text", "")
+                history_lines.append(f"{role}: {text}")
+        history_block = "\n".join(history_lines).strip()
+
         # Формируем промпт с RAG контекстом
         if use_rag and rag_context:
             prompt = f"""Ты помощник по D&D для новичков.
@@ -251,6 +312,9 @@ class OllamaClient:
 
 БАЗОВАЯ ИНФОРМАЦИЯ РАЗДЕЛА:
 {section_content}
+
+ИСТОРИЯ ДИАЛОГА:
+{history_block}
 
 ---
 
@@ -270,27 +334,27 @@ class OllamaClient:
         else:
             prompt = f"""Ты помощник по D&D для новичков.
 
-    КОНТЕКСТ ТЕКУЩЕГО РАЗДЕЛА "{section_name}":
-    {section_content}
+КОНТЕКСТ ТЕКУЩЕГО РАЗДЕЛА "{section_name}":
+{section_content}
 
-    ---
+ИСТОРИЯ ДИАЛОГА:
+{history_block}
 
-    ИНСТРУКЦИИ:
-    1. Если вопрос пользователя относится к содержимому этого раздела - ответь на него кратко, понятно и дружелюбно на русском.
-    2. Если вопрос НЕ об этом разделе - предложи открыть соответствующий раздел (укажи его название) НАЗВАНИЯ РАЗДЕЛОВ(/races — список доступных рас,
-        /classes — список классов персонажей,
-        /rules — основные правила D&D,
-        /dice — всё о бросках кубиков,
-        /combat — правила боя для новичков,
-        /spells — базовая информация о заклинаниях,
-        /glossary — словарь терминов D&D,
-        /stats — объяснение характеристик).
-    3. Всегда приводи примеры из D&D когда это уместно.
+---
 
-    ВОПРОС ПОЛЬЗОВАТЕЛЯ:
-    {user_message}
+ФОРМАТ ОТВЕТА ДЛЯ TELEGRAM - ParseMode.HTML, а значит:
+- Без таблиц и сложной разметки.
+- Выделяй ключевые слова ТОЛЬКО с использованием <b>жирный</b>, или примеры кубов через <code>код</code>. Если для ответа нужен список используй нумерованный, а не маркерный.
 
-    ОТВЕТ:"""
+ИНСТРУКЦИИ:
+
+1. Если вопрос пользователя относится к содержимому этого раздела — ответь кратко, понятно и дружелюбно на русском. Приводи примеры из D&D когда это уместно.
+2. Если вопрос НЕ об этом разделе — ответь строго так: "Вы обратились не в тот раздел, рекомендуем обратиться в раздел /название". НАЗВАНИЯ РАЗДЕЛОВ: /races, /classes, /rules, /dice, /combat, /spells, /glossary, /stats.
+
+ВОПРОС ПОЛЬЗОВАТЕЛЯ:
+{user_message}
+
+ОТВЕТ:"""
         
         try:
             response = requests.post(
@@ -312,3 +376,62 @@ class OllamaClient:
             return "❌ Ошибка подключения к Ollama. Убедись, что сервис запущен."
         except Exception as e:
             return f"❌ Ошибка: {e}"
+
+    def _generate_search_queries(
+        self,
+        user_message: str,
+        section_name: str,
+        section_content: str,
+        history: list[dict],
+        summary: str
+    ) -> List[str]:
+        """
+        Агентный шаг: модель формирует до 3 точных поисковых запросов
+        для извлечения релевантных документов из БД.
+        """
+        history_lines = []
+        if summary:
+            history_lines.append(f"КРАТКАЯ СВОДКА: {summary}")
+        for msg in history[-6:]:
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            history_lines.append(f"{role}: {text}")
+        history_block = "\n".join(history_lines)
+
+        prompt = f"""Ты помощник по D&D. Составь до трёх коротких поисковых запросов,
+чтобы найти релевантные документы в локальной БД (races/spells/classes).
+
+РАЗДЕЛ: {section_name}
+БАЗОВАЯ ИНФОРМАЦИЯ РАЗДЕЛА:
+{section_content}
+
+ИСТОРИЯ (последние сообщения):
+{history_block}
+
+ТЕКУЩИЙ ВОПРОС:
+{user_message}
+
+Правила:
+- Дай 1-3 запроса, каждый на новой строке.
+- Запросы должны быть лаконичными, без лишних слов.
+- Если вопрос не про этот раздел — сформулируй запрос так, чтобы сузить поиск в рамках раздела.
+Ответь только списком запросов, без пояснений."""
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": 0.3
+                },
+                timeout=60
+            )
+            if resp.status_code == 200:
+                text = resp.json().get("response", "").strip()
+                queries = [line.strip() for line in text.splitlines() if line.strip()]
+                return queries[:3] if queries else []
+        except Exception as e:
+            print(f"⚠️ Ошибка агентного построения запросов: {e}")
+        return []
