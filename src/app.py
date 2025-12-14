@@ -3,6 +3,7 @@ from typing import Final
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
+from datetime import datetime
 from telegram.ext import MessageHandler, filters, CallbackQueryHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from .ollama import OllamaClient
@@ -29,6 +30,9 @@ from .texts import (
 
 
 ollama_client = OllamaClient()
+# Параметры для управления длиной контекста
+MAX_CONTEXT_TOKENS = 35000  # бюджет модели (~35к токенов)
+PROMPT_HEADROOM_TOKENS = 2000  # запас под инструкции и системный текст
 RACES_DATA = {}
 SPELLS_CACHE: Dict[str, Dict] = {}  # Кэш заклинаний по уровням
 CLASSES_DATA: Dict[str, Dict] = {}  # Кэш классов
@@ -806,6 +810,116 @@ def get_bot_token() -> str:
 
 user_sessions: Dict[int, Dict[str, str]] = {}
 
+def _approx_tokens(text: str) -> int:
+	"""Грубая оценка токенов: ~4 символа на токен."""
+	if not text:
+		return 0
+	return max(1, len(text) // 4)
+
+
+def _ensure_logs_dir() -> Path:
+	log_dir = Path(__file__).parent.parent / "logs"
+	log_dir.mkdir(exist_ok=True)
+	return log_dir
+
+
+def _log_message(user_id: int, username: str, section: str, role: str, text: str) -> None:
+	try:
+		log_dir = _ensure_logs_dir()
+		log_file = log_dir / f"user_{user_id}.log"
+		entry = {
+			"time": datetime.utcnow().isoformat() + "Z",
+			"user_id": user_id,
+			"username": username or "",
+			"section": section,
+			"role": role,
+			"text": text,
+		}
+		with log_file.open("a", encoding="utf-8") as f:
+			f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+	except Exception as e:
+		print(f"⚠️ Не удалось записать лог: {e}")
+
+
+def _should_skip_logging(text: str) -> bool:
+	if not text:
+		return True
+	normalized = text.strip()
+	if normalized.startswith("/"):
+		return True
+	if normalized.lower() == "назад":
+		return True
+	return False
+
+
+def _get_session(user_id: int) -> Dict:
+	if user_id not in user_sessions:
+		user_sessions[user_id] = {
+			"section": "rules",
+			"content": RULES_TEXT,
+			"history": [],
+			"summary": ""
+		}
+	# Обеспечиваем обязательные поля
+	session = user_sessions[user_id]
+	session.setdefault("history", [])
+	session.setdefault("summary", "")
+	return session
+
+
+def _append_history(user_id: int, role: str, text: str) -> None:
+	session = _get_session(user_id)
+	session["history"].append({"role": role, "text": text})
+
+
+def _build_history_tokens(history: List[Dict[str, str]]) -> int:
+	return sum(_approx_tokens(f"{m.get('role','')}: {m.get('text','')}") for m in history)
+
+
+def _ensure_history_fits(user_id: int, section_name: str, section_content: str, incoming_user_text: str = "") -> tuple[List[Dict[str, str]], str]:
+	"""
+	Следит, чтобы контекст (summary + history + новые данные) помещался в бюджет.
+	Если не помещается — сворачивает старшую часть истории в summary с помощью LLM.
+	"""
+	session = _get_session(user_id)
+	history = session["history"]
+	summary = session.get("summary", "")
+
+	def total_tokens(hist: List[Dict[str, str]], summ: str) -> int:
+		return (
+			_approx_tokens(section_content)
+			+ _approx_tokens(summ)
+			+ _build_history_tokens(hist)
+			+ _approx_tokens(incoming_user_text)
+			+ PROMPT_HEADROOM_TOKENS
+		)
+
+	# Пока помещается — выходим
+	if total_tokens(history, summary) <= MAX_CONTEXT_TOKENS:
+		return history, summary
+
+	# Если не помещается — сворачиваем старшую половину истории
+	while history and total_tokens(history, summary) > MAX_CONTEXT_TOKENS:
+		half = max(1, len(history) // 2)
+		to_summarize = history[:half]
+		# Запрашиваем краткую сводку старой части
+		try:
+			summary_piece = ollama_client.summarize_messages(
+				messages=to_summarize,
+				section_name=section_name,
+				section_content=section_content
+			)
+		except Exception as e:
+			print(f"⚠️ Ошибка суммаризации истории: {e}")
+			summary_piece = ""
+
+		summary = "\n".join([s for s in [summary, summary_piece] if s]).strip()
+		history = history[half:]
+		session["history"] = history
+		session["summary"] = summary
+
+	return history, summary
+
 class UserSession:
     """Управляет состоянием сессии пользователя"""
     def __init__(self, user_id: int):
@@ -819,7 +933,9 @@ class UserSession:
         if user_id not in user_sessions:
             user_sessions[user_id] = {
                 "section": "rules",
-                "content": RULES_TEXT
+                "content": RULES_TEXT,
+                "history": [],
+                "summary": ""
             }
         return user_sessions.get(user_id)
     
@@ -844,10 +960,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 		return
 
 	user_id = update.effective_user.id
-	# Получаем текущий раздел пользователя
+	username = update.effective_user.username or ""
 	user_message = update.message.text
 
 	section_name, section_content = UserSession(user_id).get_current_section()
+
+	# Перед формированием промпта убеждаемся, что история помещается в бюджет
+	history, summary = _ensure_history_fits(
+		user_id=user_id,
+		section_name=section_name,
+		section_content=section_content,
+		incoming_user_text=user_message
+	)
+
+	# Логируем, если это не команда/служебное
+	if not _should_skip_logging(user_message):
+		_log_message(user_id, username, section_name, "user", user_message)
+		_append_history(user_id, "user", user_message)
+
+	# История после добавления сообщения пользователя
+	history = _get_session(user_id)["history"]
 
 	# Определяем использовать ли RAG
 	use_rag = section_name in ["races", "spells", "classes"]
@@ -860,19 +992,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 		section_name=section_name,
 		section_content=section_content,
 		use_rag=use_rag,
-		rag_section_type=rag_section_type
+		rag_section_type=rag_section_type,
+		history=history,
+		summary=summary
 	)
 
 	if response:
+		# Сохраняем ответ в историю
+		_append_history(user_id, "assistant", response)
 		try:
 			await update.message.reply_text(response, parse_mode=ParseMode.HTML)
 		except Exception as e:
 			print(f"❌ Ошибка при отправке сообщения: {e}")
-			# Пробуем отправить без форматирования или укороченное сообщение
 			try:
 				short_response = response[:4000] if len(response) > 4000 else response
 				await update.message.reply_text(short_response)
-			except Exception as e2:
+			except Exception:
 				await update.message.reply_text(
 					"❌ Произошла ошибка при отправке ответа. Попробуйте позже."
 				)
@@ -883,7 +1018,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 	if update.message:
-		await update.message.reply_text(START_TEXT)
+		await update.message.reply_text(START_TEXT, parse_mode=ParseMode.HTML)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -901,7 +1036,7 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 	if update.message:
-		await update.message.reply_text(START_TEXT)
+		await update.message.reply_text(START_TEXT, parse_mode=ParseMode.HTML)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1323,7 +1458,8 @@ def main() -> None:
 	app.add_handler(CallbackQueryHandler(class_page_callback, pattern="^class_page_"))
 	app.add_handler(CallbackQueryHandler(class_callback, pattern="^class_"))
 
-	app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+	# Handle any non-command text messages via Ollama
+	app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
 	print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
 	app.run_polling()
