@@ -1,0 +1,595 @@
+{
+  "weapons": {
+    "quarterstaff": {
+      "name": "Посох",
+      "name_en": "Quarterstaff",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "2 зм",
+      "weight": 4,
+      "damage": "1d6",
+      "damage_type": "дробящий",
+      "properties": ["универсальное (1d8)"]
+    },
+    "dagger": {
+      "name": "Кинжал",
+      "name_en": "Dagger",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "2 зм",
+      "weight": 1,
+      "damage": "1d4",
+      "damage_type": "колющий",
+      "properties": ["лёгкое", "метательное (дистанция 20/60)", "фехтовальное"]
+    },
+    "light_crossbow": {
+      "name": "Лёгкий арбалет",
+      "name_en": "Light Crossbow",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "25 зм",
+      "weight": 5,
+      "damage": "1d8",
+      "damage_type": "колющий",
+      "properties": ["боеприпасы (дистанция 80/320)", "заряжание", "двуручное"]
+    },
+    "shortbow": {
+      "name": "Короткий лук",
+      "name_en": "Shortbow",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "25 зм",
+      "weight": 2,
+      "damage": "1d6",
+      "damage_type": "колющий",
+      "properties": ["боеприпасы (дистанция 80/320)", "двуручное"]
+    },
+    "shortsword": {
+      "name": "Короткий меч",
+      "name_en": "Shortsword",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "10 зм",
+      "weight": 2,
+      "damage": "1d6",
+      "damage_type": "колющий",
+      "properties": ["лёгкое", "фехтовальное"]
+    },
+    "rapier": {
+      "name": "Рапира",
+      "name_en": "Rapier",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "25 зм",
+      "weight": 2,
+      "damage": "1d8",
+      "damage_type": "колющий",
+      "properties": ["фехтовальное"]
+    },
+    "longsword": {
+      "name": "Длинный меч",
+      "name_en": "Longsword",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "15 зм",
+      "weight": 3,
+      "damage": "1d8",
+      "damage_type": "рубящий",
+      "properties": ["универсальное (1d10)"]
+    },
+    "scimitar": {
+      "name": "Скимитар",
+      "name_en": "Scimitar",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "25 зм",
+      "weight": 3,
+      "damage": "1d6",
+      "damage_type": "рубящий",
+      "properties": ["лёгкое", "фехтовальное"]
+    },
+    "handaxe": {
+      "name": "Ручной топор",
+      "name_en": "Handaxe",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "5 зм",
+      "weight": 2,
+      "damage": "1d6",
+      "damage_type": "рубящий",
+      "properties": ["лёгкое", "метательное (дистанция 20/60)"]
+    },
+    "greatclub": {
+      "name": "Дубина",
+      "name_en": "Greatclub",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "2 зм",
+      "weight": 10,
+      "damage": "1d8",
+      "damage_type": "дробящий",
+      "properties": ["двуручное"]
+    },
+    "spear": {
+      "name": "Копьё",
+      "name_en": "Spear",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "1 зм",
+      "weight": 3,
+      "damage": "1d6",
+      "damage_type": "колющий",
+      "properties": ["метательное (дистанция 20/60)", "универсальное (1d8)"]
+    },
+    "mace": {
+      "name": "Булава",
+      "name_en": "Mace",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "5 зм",
+      "weight": 4,
+      "damage": "1d6",
+      "damage_type": "дробящий",
+      "properties": []
+    },
+    "warhammer": {
+      "name": "Боевой молот",
+      "name_en": "Warhammer",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "15 зм",
+      "weight": 2,
+      "damage": "1d8",
+      "damage_type": "дробящий",
+      "properties": ["универсальное (1d10)"]
+    },
+    "longbow": {
+      "name": "Длинный лук",
+      "name_en": "Longbow",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "50 зм",
+      "weight": 2,
+      "damage": "1d8",
+      "damage_type": "колющий",
+      "properties": ["боеприпасы (дистанция 150/600)", "двуручное", "тяжёлое"]
+    },
+    "martial_weapon": {
+      "name": "Воинское оружие",
+      "name_en": "Martial Weapon",
+      "type": "weapon",
+      "category": "воинское оружие",
+      "cost": "0 зм",
+      "weight": 0,
+      "damage": "1d8",
+      "damage_type": "рубящий",
+      "properties": [],
+      "description": "Заглушка - выбрать конкретное воинское оружие"
+    },
+    "simple_weapon": {
+      "name": "Простое оружие",
+      "name_en": "Simple Weapon",
+      "type": "weapon",
+      "category": "простое оружие",
+      "cost": "0 зм",
+      "weight": 0,
+      "damage": "1d6",
+      "damage_type": "рубящий",
+      "properties": [],
+      "description": "Заглушка - выбрать конкретное простое оружие"
+    },
+    "20 arrows": {
+      "name": "Стрелы (20)",
+      "name_en": "Arrows (20)",
+      "type": "misc",
+      "cost": "1 зм",
+      "weight": 1,
+      "description": "20 стрел для лука"
+    },
+    "20 bolts": {
+      "name": "Болты (20)",
+      "name_en": "Crossbow Bolts (20)",
+      "type": "misc",
+      "cost": "1 зм",
+      "weight": 1.5,
+      "description": "20 болтов для арбалета"
+    }
+  },
+  "armor": {
+    "leather_armor": {
+      "name": "Кожаный доспех",
+      "name_en": "Leather Armor",
+      "type": "armor",
+      "category": "лёгкие доспехи",
+      "cost": "10 зм",
+      "weight": 10,
+      "ac": 11,
+      "properties": []
+    },
+    "studded_leather": {
+      "name": "Кольчужный кожаный доспех",
+      "name_en": "Studded Leather",
+      "type": "armor",
+      "category": "лёгкие доспехи",
+      "cost": "45 зм",
+      "weight": 13,
+      "ac": 12,
+      "properties": []
+    },
+    "chain_shirt": {
+      "name": "Кольчужная рубаха",
+      "name_en": "Chain Shirt",
+      "type": "armor",
+      "category": "средние доспехи",
+      "cost": "50 зм",
+      "weight": 20,
+      "ac": 13,
+      "properties": []
+    },
+    "chain_mail": {
+      "name": "Кольчуга",
+      "name_en": "Chain Mail",
+      "type": "armor",
+      "category": "тяжёлые доспехи",
+      "cost": "75 зм",
+      "weight": 55,
+      "ac": 16,
+      "properties": ["скрытность с помехой", "требует Силы 13"]
+    },
+    "scale_mail": {
+      "name": "Чешуйчатый доспех",
+      "name_en": "Scale Mail",
+      "type": "armor",
+      "category": "средние доспехи",
+      "cost": "50 зм",
+      "weight": 45,
+      "ac": 14,
+      "properties": ["скрытность с помехой"]
+    },
+    "shield": {
+      "name": "Щит",
+      "name_en": "Shield",
+      "type": "armor",
+      "category": "щит",
+      "cost": "10 зм",
+      "weight": 6,
+      "ac_bonus": 2,
+      "properties": []
+    }
+  },
+  "tools": {
+    "component_pouch": {
+      "name": "Набор компонентов",
+      "name_en": "Component Pouch",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "25 зм",
+      "weight": 2,
+      "description": "Небольшой кожаный мешочек с компонентами для заклинаний"
+    },
+    "arcane_focus_wand": {
+      "name": "Волшебная палочка",
+      "name_en": "Arcane Focus (Wand)",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "10 зм",
+      "weight": 1,
+      "description": "Волшебный фокус в виде палочки"
+    },
+    "arcane_focus_orb": {
+      "name": "Волшебная сфера",
+      "name_en": "Arcane Focus (Orb)",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "20 зм",
+      "weight": 3,
+      "description": "Волшебный фокус в виде сферы"
+    },
+    "arcane_focus_staff": {
+      "name": "Волшебный посох",
+      "name_en": "Arcane Focus (Staff)",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "5 зм",
+      "weight": 4,
+      "description": "Волшебный фокус в виде посоха"
+    },
+    "holy_symbol_amulet": {
+      "name": "Святой символ (амулет)",
+      "name_en": "Holy Symbol (Amulet)",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "5 зм",
+      "weight": 1,
+      "description": "Святой символ в виде амулета"
+    },
+    "holy_symbol_emblem": {
+      "name": "Святой символ (эмблема)",
+      "name_en": "Holy Symbol (Emblem)",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "5 зм",
+      "weight": 0,
+      "description": "Святой символ в виде эмблемы на щите"
+    },
+    "holy_symbol_reliquary": {
+      "name": "Святой символ (реликварий)",
+      "name_en": "Holy Symbol (Reliquary)",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "5 зм",
+      "weight": 2,
+      "description": "Святой символ в виде реликвария"
+    },
+    "druidic_focus": {
+      "name": "Друидский фокус",
+      "name_en": "Druidic Focus",
+      "type": "tool",
+      "category": "фокус заклинателя",
+      "cost": "1 зм",
+      "weight": 0,
+      "description": "Фокус друида (ветка омелы, тотем и т.д.)"
+    },
+    "thieves_tools": {
+      "name": "Воровские инструменты",
+      "name_en": "Thieves' Tools",
+      "type": "tool",
+      "category": "инструменты",
+      "cost": "25 зм",
+      "weight": 1,
+      "description": "Набор инструментов для взлома и воровства"
+    },
+    "disguise_kit": {
+      "name": "Набор для маскировки",
+      "name_en": "Disguise Kit",
+      "type": "tool",
+      "category": "инструменты",
+      "cost": "25 зм",
+      "weight": 3,
+      "description": "Набор для создания маскировки"
+    },
+    "forgery_kit": {
+      "name": "Набор для подделки",
+      "name_en": "Forgery Kit",
+      "type": "tool",
+      "category": "инструменты",
+      "cost": "25 зм",
+      "weight": 5,
+      "description": "Набор для подделки документов"
+    }
+  },
+  "packs": {
+    "scholar_pack": {
+      "name": "Набор учёного",
+      "name_en": "Scholar's Pack",
+      "type": "pack",
+      "cost": "40 зм",
+      "weight": 0,
+      "contains": [
+        "рюкзак",
+        "книга знаний",
+        "чернила (1 флакон)",
+        "перо для письма",
+        "10 листов пергамента",
+        "мешок с песком",
+        "маленький нож"
+      ]
+    },
+    "explorer_pack": {
+      "name": "Набор исследователя",
+      "name_en": "Explorer's Pack",
+      "type": "pack",
+      "cost": "10 зм",
+      "weight": 0,
+      "contains": [
+        "рюкзак",
+        "спальный мешок",
+        "походный набор",
+        "факел (10)",
+        "рацион (10 дней)",
+        "фляга",
+        "50 футов верёвки"
+      ]
+    },
+    "dungeoneer_pack": {
+      "name": "Набор подземника",
+      "name_en": "Dungeoneer's Pack",
+      "type": "pack",
+      "cost": "12 зм",
+      "weight": 0,
+      "contains": [
+        "рюкзак",
+        "кошки",
+        "молоток",
+        "колышки (10)",
+        "факел (10)",
+        "мешок с песком",
+        "рацион (10 дней)",
+        "фляга",
+        "50 футов верёвки"
+      ]
+    },
+    "priest_pack": {
+      "name": "Набор жреца",
+      "name_en": "Priest's Pack",
+      "type": "pack",
+      "cost": "19 зм",
+      "weight": 0,
+      "contains": [
+        "рюкзак",
+        "одеяло",
+        "10 свечей",
+        "фляга",
+        "ящик для ладана",
+        "кисточка",
+        "одежда",
+        "рацион (2 дня)",
+        "кошелёк"
+      ]
+    },
+    "acolyte_pack": {
+      "name": "Набор послушника",
+      "name_en": "Acolyte's Pack",
+      "type": "pack",
+      "cost": "0 зм",
+      "weight": 0,
+      "contains": [
+        "молитвенник",
+        "палочка ладана (5)",
+        "облачение",
+        "обычная одежда",
+        "кошелёк",
+        "15 зм"
+      ]
+    },
+    "burglar_pack": {
+      "name": "Набор взломщика",
+      "name_en": "Burglar's Pack",
+      "type": "pack",
+      "cost": "16 зм",
+      "weight": 0,
+      "contains": [
+        "рюкзак",
+        "мешок с шариками (1000)",
+        "колокольчик",
+        "5 свечей",
+        "воровские инструменты",
+        "5 футов струны",
+        "фляга",
+        "рацион (5 дней)"
+      ]
+    },
+    "diplomat_pack": {
+      "name": "Набор дипломата",
+      "name_en": "Diplomat's Pack",
+      "type": "pack",
+      "cost": "39 зм",
+      "weight": 0,
+      "contains": [
+        "сундук",
+        "2 карты",
+        "набор для маскировки",
+        "богатая одежда",
+        "кошелёк"
+      ]
+    },
+    "entertainer_pack": {
+      "name": "Набор артиста",
+      "name_en": "Entertainer's Pack",
+      "type": "pack",
+      "cost": "40 зм",
+      "weight": 0,
+      "contains": [
+        "рюкзак",
+        "кровать",
+        "костюм",
+        "маска",
+        "кошелёк"
+      ]
+    }
+  },
+  "misc": {
+    "spellbook": {
+      "name": "Заклинательная книга",
+      "name_en": "Spellbook",
+      "type": "misc",
+      "cost": "50 зм",
+      "weight": 3,
+      "description": "Книга с заклинаниями волшебника"
+    },
+    "backpack": {
+      "name": "Рюкзак",
+      "name_en": "Backpack",
+      "type": "misc",
+      "cost": "2 зм",
+      "weight": 5,
+      "description": "Стандартный рюкзак"
+    },
+    "pouch": {
+      "name": "Кошелёк",
+      "name_en": "Pouch",
+      "type": "misc",
+      "cost": "5 см",
+      "weight": 1,
+      "description": "Кошелёк для монет"
+    },
+    "common_clothes": {
+      "name": "Обычная одежда",
+      "name_en": "Common Clothes",
+      "type": "misc",
+      "cost": "5 см",
+      "weight": 3,
+      "description": "Обычная повседневная одежда"
+    },
+    "vestments": {
+      "name": "Облачение",
+      "name_en": "Vestments",
+      "type": "misc",
+      "cost": "0 зм",
+      "weight": 0,
+      "description": "Церковное облачение"
+    },
+    "prayer_book": {
+      "name": "Молитвенник",
+      "name_en": "Prayer Book",
+      "type": "misc",
+      "cost": "0 зм",
+      "weight": 1,
+      "description": "Книга с молитвами"
+    },
+    "incense_stick": {
+      "name": "Палочка ладана",
+      "name_en": "Incense Stick",
+      "type": "misc",
+      "cost": "0 зм",
+      "weight": 0,
+      "description": "Палочка ладана для религиозных церемоний"
+    },
+    "lute": {
+      "name": "Лютня",
+      "name_en": "Lute",
+      "type": "tool",
+      "category": "музыкальный инструмент",
+      "cost": "35 зм",
+      "weight": 2,
+      "description": "Музыкальный инструмент - лютня"
+    },
+    "musical_instrument": {
+      "name": "Музыкальный инструмент",
+      "name_en": "Musical Instrument",
+      "type": "tool",
+      "category": "музыкальный инструмент",
+      "cost": "0 зм",
+      "weight": 0,
+      "description": "Любой музыкальный инструмент на выбор"
+    },
+    "artisan_tools": {
+      "name": "Ремесленные инструменты",
+      "name_en": "Artisan's Tools",
+      "type": "tool",
+      "category": "инструменты",
+      "cost": "0 зм",
+      "weight": 0,
+      "description": "Ремесленные инструменты на выбор (кузнец, кожевник и т.д.)"
+    },
+    "gaming_set": {
+      "name": "Игровой набор",
+      "name_en": "Gaming Set",
+      "type": "tool",
+      "category": "инструменты",
+      "cost": "0 зм",
+      "weight": 0,
+      "description": "Игровой набор (кости, карты и т.д.)"
+    },
+    "herbalism_kit": {
+      "name": "Набор травника",
+      "name_en": "Herbalism Kit",
+      "type": "tool",
+      "category": "инструменты",
+      "cost": "5 зм",
+      "weight": 3,
+      "description": "Набор для создания зелий и лекарств"
+    }
+  }
+}
+

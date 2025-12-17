@@ -3,3 +3,5 @@ __pycache__
 active_users.json
 logs/
 .venv
+data/characters/
+data/drafts/

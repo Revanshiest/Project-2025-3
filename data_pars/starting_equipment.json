@@ -1,0 +1,402 @@
+{
+  "barbarian": {
+    "name": "Варвар",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["greataxe"],
+          ["martial_melee_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["handaxe", "handaxe"],
+          ["simple_weapon"]
+        ]
+      }
+    ],
+    "fixed": ["explorer_pack", "javelin", "javelin", "javelin", "javelin"]
+  },
+
+  "bard": {
+    "name": "Бард",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["rapier"],
+          ["longsword"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["diplomat_pack"],
+          ["entertainer_pack"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["lute"],
+          ["musical_instrument"]
+        ]
+      }
+    ],
+    "fixed": ["leather_armor", "dagger"]
+  },
+
+  "cleric": {
+    "name": "Жрец",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["mace"],
+          ["warhammer"]
+        ],
+        "condition": "warhammer requires proficiency"
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["scale_mail"],
+          ["leather_armor"],
+          ["chain_mail"]
+        ],
+        "condition": "chain_mail requires proficiency"
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["light_crossbow", "crossbow_bolts_20"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["priest_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["shield", "holy_symbol"]
+  },
+
+  "druid": {
+    "name": "Друид",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["shield"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["scimitar"],
+          ["simple_melee_weapon"]
+        ]
+      }
+    ],
+    "fixed": ["leather_armor", "explorer_pack", "druidic_focus"]
+  },
+
+  "fighter": {
+    "name": "Воин",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["chain_mail"],
+          ["leather_armor", "longbow", "arrows_20"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["martial_weapon", "shield"],
+          ["martial_weapon", "martial_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["light_crossbow", "crossbow_bolts_20"],
+          ["handaxe", "handaxe"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["dungeoneer_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": []
+  },
+
+  "monk": {
+    "name": "Монах",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["shortsword"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["dungeoneer_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["dart", "dart", "dart", "dart", "dart", "dart", "dart", "dart", "dart", "dart"]
+  },
+
+  "paladin": {
+    "name": "Паладин",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["martial_weapon", "shield"],
+          ["martial_weapon", "martial_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["javelin", "javelin", "javelin", "javelin", "javelin"],
+          ["simple_melee_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["priest_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["chain_mail", "holy_symbol"]
+  },
+
+  "ranger": {
+    "name": "Следопыт",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["scale_mail"],
+          ["leather_armor"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["shortsword", "shortsword"],
+          ["simple_melee_weapon", "simple_melee_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["dungeoneer_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["longbow", "arrows_20", "quiver"]
+  },
+
+  "rogue": {
+    "name": "Плут",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["rapier"],
+          ["shortsword"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["shortbow", "arrows_20", "quiver"],
+          ["shortsword"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["burglar_pack"],
+          ["dungeoneer_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["leather_armor", "dagger", "dagger", "thieves_tools"]
+  },
+
+  "sorcerer": {
+    "name": "Чародей",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["light_crossbow", "crossbow_bolts_20"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["component_pouch"],
+          ["arcane_focus"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["dungeoneer_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["dagger", "dagger"]
+  },
+
+  "warlock": {
+    "name": "Колдун",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["light_crossbow", "crossbow_bolts_20"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["component_pouch"],
+          ["arcane_focus"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["scholar_pack"],
+          ["dungeoneer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["leather_armor", "simple_weapon", "dagger", "dagger"]
+  },
+
+  "wizard": {
+    "name": "Волшебник",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["quarterstaff"],
+          ["dagger"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["component_pouch"],
+          ["arcane_focus"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["scholar_pack"],
+          ["explorer_pack"]
+        ]
+      }
+    ],
+    "fixed": ["spellbook"]
+  },
+
+  "artificer": {
+    "name": "Изобретатель",
+    "choices": [
+      {
+        "choose": 1,
+        "options": [
+          ["simple_weapon"],
+          ["simple_weapon"]
+        ]
+      },
+      {
+        "choose": 1,
+        "options": [
+          ["light_crossbow", "crossbow_bolts_20"],
+          ["simple_weapon"]
+        ]
+      }
+    ],
+    "fixed": ["thieves_tools", "dungeoneer_pack", "studded_leather_armor"]
+  },
+
+  "_equipment_packs": {
+    "burglar_pack": {
+      "name": "Набор взломщика",
+      "cost": "16 зм",
+      "contents": ["backpack", "ball_bearings_1000", "string_10ft", "bell", "candle", "candle", "candle", "candle", "candle", "crowbar", "hammer", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "hooded_lantern", "oil_flask", "oil_flask", "rations_5days", "tinderbox", "waterskin", "hempen_rope_50ft"]
+    },
+    "diplomat_pack": {
+      "name": "Набор дипломата",
+      "cost": "39 зм",
+      "contents": ["chest", "scroll_case", "scroll_case", "fine_clothes", "ink_bottle", "ink_pen", "lamp", "oil_flask", "oil_flask", "paper_sheet", "paper_sheet", "paper_sheet", "paper_sheet", "paper_sheet", "perfume_vial", "sealing_wax", "soap"]
+    },
+    "dungeoneer_pack": {
+      "name": "Набор исследователя подземелий",
+      "cost": "12 зм",
+      "contents": ["backpack", "crowbar", "hammer", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "piton", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "tinderbox", "rations_10days", "waterskin", "hempen_rope_50ft"]
+    },
+    "entertainer_pack": {
+      "name": "Набор артиста",
+      "cost": "40 зм",
+      "contents": ["backpack", "bedroll", "costume", "costume", "candle", "candle", "candle", "candle", "candle", "rations_5days", "waterskin", "disguise_kit"]
+    },
+    "explorer_pack": {
+      "name": "Набор путешественника",
+      "cost": "10 зм",
+      "contents": ["backpack", "bedroll", "mess_kit", "tinderbox", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "torch", "rations_10days", "waterskin", "hempen_rope_50ft"]
+    },
+    "priest_pack": {
+      "name": "Набор священника",
+      "cost": "19 зм",
+      "contents": ["backpack", "blanket", "candle", "candle", "candle", "candle", "candle", "candle", "candle", "candle", "candle", "candle", "tinderbox", "alms_box", "incense_block", "incense_block", "censer", "vestments", "rations_2days", "waterskin"]
+    },
+    "scholar_pack": {
+      "name": "Набор учёного",
+      "cost": "40 зм",
+      "contents": ["backpack", "book_of_lore", "ink_bottle", "ink_pen", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "parchment_sheet", "little_bag_of_sand", "small_knife"]
+    }
+  },
+
+  "_item_categories": {
+    "simple_weapon": "Любое простое оружие",
+    "simple_melee_weapon": "Любое простое рукопашное оружие",
+    "martial_weapon": "Любое воинское оружие",
+    "martial_melee_weapon": "Любое воинское рукопашное оружие",
+    "musical_instrument": "Любой музыкальный инструмент"
+  }
+}
