@@ -1,0 +1,135 @@
+{
+  "id": "sorcerer",
+  "name": "Чародей",
+  "name_en": "Sorcerer",
+  "hit_dice": "1d6",
+  "primary_abilities": [
+    "cha",
+    "con"
+  ],
+  "saving_throws": [
+    "con",
+    "cha"
+  ],
+  "armor_proficiencies": [],
+  "shield_proficiencies": [
+    "shields"
+  ],
+  "weapon_proficiencies": [
+    "simple",
+    "martial"
+  ],
+  "tool_proficiencies": [],
+  "skill_choices": {
+    "count": 2,
+    "from": [
+      "intimidation",
+      "arcana",
+      "deception",
+      "insight",
+      "religion",
+      "persuasion"
+    ]
+  },
+  "features": {
+    "1": [
+      {
+        "id": "unseen_servant",
+        "name": "Невидимый слуга",
+        "name_en": "Unseen Servant",
+        "description": "Вы можете наложить заклинание Невидимый слуга, создавая невидимого помощника, который может выполнять простые задачи."
+      },
+      {
+        "id": "stone_magic",
+        "name": "Умение магии камня",
+        "name_en": "Stone Magic",
+        "description": "Вы получаете умение магии камня, позволяющее использовать заклинания, связанные с камнем."
+      },
+      {
+        "id": "sorcerous_origin_choice",
+        "name": "Выбор архетипа",
+        "name_en": "Sorcerous Origin",
+        "description": "На 1 уровне вы выбираете архетип колдовства, который определяет дополнительные способности.",
+        "subclass_feature": true,
+        "subclass_levels": [
+          1,
+          6,
+          14,
+          18
+        ]
+      }
+    ],
+    "3": [
+      {
+        "id": "see_invisibility",
+        "name": "Видение невидимого",
+        "name_en": "See Invisibility",
+        "description": "Вы получаете возможность видеть невидимых существ и предметы."
+      }
+    ],
+    "4": [
+      {
+        "id": "ability_score_improvement",
+        "name": "Увеличение характеристик",
+        "name_en": "Ability Score Improvement",
+        "description": "Вы можете повысить значение одной характеристики на 2 или двух характеристик на 1. Значение характеристики не должно превысить 20. Вместо этого вы можете взять черту."
+      }
+    ],
+    "5": [
+      {
+        "id": "speak_with_dead",
+        "name": "Разговор с мёртвыми",
+        "name_en": "Speak with Dead",
+        "description": "Вы можете наложить заклинание Разговор с мёртвыми, позволяющее задавать вопросы умершему."
+      }
+    ],
+    "7": [
+      {
+        "id": "death_ward",
+        "name": "Защита от смерти",
+        "name_en": "Death Ward",
+        "description": "Вы получаете заклинание Защита от смерти, которое защищает вас от смерти один раз."
+      }
+    ],
+    "8": [
+      {
+        "id": "ability_score_improvement",
+        "name": "Увеличение характеристик",
+        "name_en": "Ability Score Improvement",
+        "description": "Вы можете повысить значение одной характеристики на 2 или двух характеристик на 1. Значение характеристики не должно превысить 20. Вместо этого вы можете взять черту."
+      }
+    ],
+    "9": [
+      {
+        "id": "little_death",
+        "name": "Маленькая смерть",
+        "name_en": "Little Death",
+        "description": "Вы получаете заклинание Маленькая смерть, позволяющее нанести урон и восстановить здоровье."
+      }
+    ],
+    "12": [
+      {
+        "id": "ability_score_improvement",
+        "name": "Увеличение характеристик",
+        "name_en": "Ability Score Improvement",
+        "description": "Вы можете повысить значение одной характеристики на 2 или двух характеристик на 1. Значение характеристики не должно превысить 20. Вместо этого вы можете взять черту."
+      }
+    ],
+    "16": [
+      {
+        "id": "ability_score_improvement",
+        "name": "Увеличение характеристик",
+        "name_en": "Ability Score Improvement",
+        "description": "Вы можете повысить значение одной характеристики на 2 или двух характеристик на 1. Значение характеристики не должно превысить 20. Вместо этого вы можете взять черту."
+      }
+    ],
+    "19": [
+      {
+        "id": "ability_score_improvement",
+        "name": "Увеличение характеристик",
+        "name_en": "Ability Score Improvement",
+        "description": "Вы можете повысить значение одной характеристики на 2 или двух характеристик на 1. Значение характеристики не должно превысить 20. Вместо этого вы можете взять черту."
+      }
+    ]
+  }
+}

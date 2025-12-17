@@ -27,6 +27,10 @@ from .texts import (
 	RACES_SHORT_DESCRIPTIONS
 )
 
+from . import character_creation as cc
+from .character_creator import load_user_characters, format_character_summary, delete_character, save_character, get_character_by_id
+from . import level_up as lu
+
 
 ollama_client = OllamaClient()
 RACES_DATA = {}
@@ -217,13 +221,13 @@ def get_spell_level_display_name(level: str) -> str:
 def build_spells_level_selection() -> tuple[str, InlineKeyboardMarkup]:
     """Сформировать экран выбора уровня заклинаний"""
     text = "✨ <b>Выберите уровень заклинаний:</b>\n\n"
-    text += "Кантрипы — базовые заклинания, не требующие ячеек\n"
+    text += "Заговоры — базовые заклинания, не требующие ячеек\n"
     text += "1-9 уровень — заклинания разной силы"
     
     keyboard: list[list[InlineKeyboardButton]] = []
     
-    # Кантрипы
-    keyboard.append([InlineKeyboardButton("✨ Кантрипы", callback_data="spell_level_cantrips")])
+    # Заговоры
+    keyboard.append([InlineKeyboardButton("✨ Заговоры", callback_data="spell_level_cantrips")])
     
     # Уровни 1-9 в две колонки
     levels_row: list[InlineKeyboardButton] = []
@@ -844,6 +848,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 		return
 
 	user_id = update.effective_user.id
+	
+	# Проверяем, находится ли пользователь в процессе создания персонажа
+	session = cc.get_character_session(user_id)
+	if session and session.step == cc.CreationStep.NAME:
+		# Обрабатываем ввод имени персонажа
+		text, markup = cc.handle_name_input(user_id, update.message.text)
+		if markup:
+			await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+		else:
+			await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+		return
+	
 	# Получаем текущий раздел пользователя
 	user_message = update.message.text
 
@@ -1012,6 +1028,256 @@ async def cmd_classes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     
     text, markup = build_classes_page(page=1)
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+# ========== ФУНКЦИИ ДЛЯ ПОВЫШЕНИЯ УРОВНЯ ==========
+
+def build_levelup_confirm_message(session) -> tuple[str, InlineKeyboardMarkup]:
+    """Построить сообщение подтверждения повышения уровня"""
+    character = session.character
+    gains = session.gains
+    char_id = character.id
+    
+    text = f"📈 <b>Подтверждение повышения уровня</b>\n\n"
+    text += f"<b>{character.name}</b> ({character.race_name} {character.class_name})\n"
+    text += f"Уровень: {character.level} → {gains.new_level}\n\n"
+    
+    # Хиты
+    if session.hp_choice == "average":
+        hp_gain = gains.hp_roll_options[0] + character.con_mod
+        text += f"❤️ <b>Хиты:</b> +{hp_gain} (среднее)\n"
+    else:
+        dice = gains.hp_roll_options[1]
+        text += f"❤️ <b>Хиты:</b> бросок 1d{dice}+{character.con_mod}\n"
+    
+    # Архетип
+    if session.selected_archetype:
+        text += f"🎭 <b>Архетип:</b> {session.selected_archetype}\n"
+    
+    # Новые способности
+    if gains.new_features:
+        text += "\n<b>Новые способности:</b>\n"
+        for feature in gains.new_features[:5]:  # показываем максимум 5
+            name = feature.get("name", "Способность")
+            text += f"• {name}\n"
+        if len(gains.new_features) > 5:
+            text += f"... и ещё {len(gains.new_features) - 5}\n"
+    
+    text += "\n<b>Подтвердить повышение уровня?</b>"
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить", callback_data=f"char_levelup_confirm_{char_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}")]
+    ]
+    
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_archetype_list_message(session) -> tuple[str, InlineKeyboardMarkup]:
+    """Построить список архетипов для выбора"""
+    from .character_data import get_archetypes_for_class
+    
+    character = session.character
+    char_id = character.id
+    archetypes = get_archetypes_for_class(character.class_name)
+    
+    text = f"🎭 <b>Выберите архетип для {character.class_name}</b>\n\n"
+    text += f"На {session.gains.new_level} уровне вы выбираете путь развития вашего персонажа.\n"
+    text += "Нажмите на архетип, чтобы узнать подробности:\n\n"
+    
+    keyboard = []
+    for idx, (arch_name, arch_data) in enumerate(archetypes.items()):
+        desc = arch_data.get("description", "")
+        # Показываем первые 80 символов описания
+        short_desc = desc[:80] + "..." if len(desc) > 80 else desc
+        text += f"<b>• {arch_name}</b>\n<i>{short_desc}</i>\n\n"
+        
+        # Кнопка для просмотра деталей
+        keyboard.append([InlineKeyboardButton(
+            f"📖 {arch_name}",
+            callback_data=f"char_lu_arv_{char_id}_{idx}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}")])
+    
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_archetype_detail_message(session, arch_idx: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Построить детальное описание архетипа"""
+    from .character_data import get_archetypes_for_class
+    
+    character = session.character
+    char_id = character.id
+    new_level = session.gains.new_level
+    archetypes = get_archetypes_for_class(character.class_name)
+    arch_names = list(archetypes.keys())
+    
+    if arch_idx >= len(arch_names):
+        return build_archetype_list_message(session)
+    
+    arch_name = arch_names[arch_idx]
+    arch_data = archetypes[arch_name]
+    
+    text = f"🎭 <b>{arch_name}</b>\n"
+    text += f"<i>Архетип для {character.class_name}</i>\n\n"
+    
+    # Описание архетипа (до 600 символов для первого экрана)
+    description = arch_data.get("description", "")
+    if len(description) > 600:
+        text += f"{description[:600]}...\n\n"
+    else:
+        text += f"{description}\n\n"
+    
+    # Способности которые получит персонаж на текущем уровне
+    skills = arch_data.get("skills", {})
+    level_skills = skills.get(str(new_level), [])
+    
+    if level_skills:
+        text += f"<b>⚡ Способности {new_level} уровня:</b>\n"
+        for skill in level_skills:
+            # Показываем первые 200 символов каждой способности
+            if len(skill) > 200:
+                text += f"• {skill[:200]}...\n\n"
+            else:
+                text += f"• {skill}\n\n"
+    
+    # Заклинания архетипа на текущем уровне
+    spells = arch_data.get("spells", {})
+    level_spells = spells.get(str(new_level), [])
+    
+    if level_spells:
+        text += f"<b>✨ Особые заклинания {new_level} уровня:</b>\n"
+        for spell in level_spells:
+            text += f"• {spell}\n"
+        text += "\n"
+    
+    # Краткий обзор что будет на следующих уровнях
+    future_levels = [lvl for lvl in sorted(skills.keys(), key=lambda x: int(x)) if int(lvl) > new_level]
+    if future_levels:
+        text += "<b>📈 На следующих уровнях:</b>\n"
+        for lvl in future_levels[:3]:  # Показываем до 3 следующих уровней
+            text += f"• {lvl} ур.: новые способности\n"
+    
+    keyboard = [
+        [InlineKeyboardButton(f"✅ Выбрать {arch_name}", callback_data=f"char_lu_ar_{char_id}_{arch_idx}")],
+        [InlineKeyboardButton("◀ К списку архетипов", callback_data=f"char_lu_arlist_{char_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}")]
+    ]
+    
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def cmd_createcharacter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /createcharacter - начать создание персонажа"""
+    if not update.message or not update.effective_user:
+        return
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем, есть ли незавершённая сессия
+    existing_session = cc.get_character_session(user_id)
+    if existing_session:
+        keyboard = [
+            [InlineKeyboardButton("✅ Продолжить", callback_data="char_continue")],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data="char_restart")],
+            [InlineKeyboardButton("❌ Отменить", callback_data="char_create_cancel")]
+        ]
+        await update.message.reply_text(
+            "⚠️ У тебя уже есть незавершённое создание персонажа.\n\nЧто делать?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Начинаем новое создание
+    text, markup = cc.start_character_creation(user_id)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def cmd_mycharacters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /mycharacters - список персонажей пользователя"""
+    if not update.message or not update.effective_user:
+        return
+    
+    user_id = update.effective_user.id
+    characters = load_user_characters(user_id)
+    
+    if not characters:
+        await update.message.reply_text(
+            "📜 У тебя пока нет персонажей.\n\n"
+            "Создай своего первого героя командой /createcharacter"
+        )
+        return
+    
+    text = "📜 <b>Твои персонажи:</b>\n\n"
+    
+    keyboard = []
+    for char in characters:
+        char_summary = f"{char.name} ({char.race_name} {char.class_name} {char.level})\n"
+        text += f"• {char_summary}"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"👤 {char.name}",
+                callback_data=f"char_view_{char.id}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("➕ Создать нового", callback_data="char_create_new")])
+    
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def cmd_levelup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /levelup - повысить уровень персонажа"""
+    if not update.message or not update.effective_user:
+        return
+    
+    user_id = update.effective_user.id
+    characters = load_user_characters(user_id)
+    
+    if not characters:
+        await update.message.reply_text(
+            "📜 У тебя пока нет персонажей.\n\n"
+            "Создай своего первого героя командой /createcharacter"
+        )
+        return
+    
+    # Фильтруем персонажей, которые могут повысить уровень (< 20)
+    upgradable = [c for c in characters if c.level < 20]
+    
+    if not upgradable:
+        await update.message.reply_text(
+            "🏆 Все твои персонажи достигли максимального уровня (20)!"
+        )
+        return
+    
+    text = "⬆️ <b>Повышение уровня</b>\n\n"
+    text += "Выбери персонажа для повышения уровня:\n\n"
+    
+    keyboard = []
+    for char in upgradable:
+        char_info = f"{char.name} (ур. {char.level} → {char.level + 1})"
+        text += f"• {char_info}\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"⬆️ {char.name}",
+                callback_data=f"char_levelup_{char.id}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="char_list")])
+    
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def race_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1198,7 +1464,756 @@ async def class_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     text, markup = build_classes_page(page=page)
     await query.answer()
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    try:
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    except Exception:
+        pass  # Сообщение не изменилось
+
+
+# ========== ОБРАБОТЧИКИ ДЛЯ СОЗДАНИЯ ПЕРСОНАЖЕЙ ==========
+
+async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Главный обработчик для создания персонажей"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    data = query.data
+    
+    # Отмена создания
+    if data == "char_create_cancel":
+        text = cc.handle_creation_cancel(user_id)
+        await query.edit_message_text(text)
+        return
+    
+    # Создание нового персонажа
+    if data == "char_create_new":
+        text, markup = cc.start_character_creation(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Продолжить незавершённое создание
+    if data == "char_continue":
+        session = cc.get_character_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия не найдена.")
+            return
+        
+        # Определяем текущий шаг и показываем соответствующий экран
+        if session.step == cc.CreationStep.NAME:
+            text, markup = cc.start_character_creation(user_id)
+        elif session.step == cc.CreationStep.RACE:
+            text, markup = cc.build_race_selection_message()
+        elif session.step == cc.CreationStep.CLASS:
+            text, markup = cc.build_class_selection_message()
+        elif session.step == cc.CreationStep.BACKGROUND:
+            text, markup = cc.build_background_selection_message()
+        elif session.step == cc.CreationStep.ABILITIES_METHOD:
+            text, markup = cc.build_abilities_method_message()
+        elif session.step == cc.CreationStep.ABILITIES_ASSIGN:
+            text, markup = cc.build_abilities_assign_message(user_id)
+        elif session.step == cc.CreationStep.ABILITIES_POINT_BUY:
+            text, markup = cc.build_pointbuy_message(user_id)
+        elif session.step == cc.CreationStep.EQUIPMENT:
+            text, markup = cc.build_equipment_selection_message(user_id)
+        elif session.step == cc.CreationStep.SKILLS:
+            text, markup = cc.build_skills_selection_message(user_id)
+        elif session.step == cc.CreationStep.SPELLS_CANTRIPS:
+            text, markup = cc.build_cantrips_selection_message(user_id)
+        elif session.step == cc.CreationStep.SPELLS_KNOWN:
+            text, markup = cc.build_spells_selection_message(user_id)
+        elif session.step == cc.CreationStep.REVIEW:
+            text, markup = cc.build_review_message(user_id)
+        else:
+            text = "❌ Неизвестный этап создания."
+            markup = None
+        
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Перезапуск создания
+    if data == "char_restart":
+        cc.delete_character_session(user_id)
+        text, markup = cc.start_character_creation(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор расы
+    if data.startswith("char_race_"):
+        if "page" in data:
+            page = int(data.split("_")[-1])
+            text, markup = cc.build_race_selection_message(page)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif "view" in data:
+            # Просмотр расы: char_race_view_{idx}
+            race_idx = int(data.split("_")[-1])
+            text, markup = cc.build_race_detail_message(race_idx)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif "select" in data:
+            # Выбор расы: char_race_select_{idx}
+            race_idx = int(data.split("_")[-1])
+            text, markup = cc.handle_race_selection(user_id, race_idx)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор класса
+    if data.startswith("char_class_"):
+        if "page" in data:
+            page = int(data.split("_")[-1])
+            text, markup = cc.build_class_selection_message(page)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            class_id = data.replace("char_class_", "")
+            text, markup = cc.handle_class_selection(user_id, class_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор предыстории
+    if data.startswith("char_bg_"):
+        if "page" in data:
+            page = int(data.split("_")[-1])
+            text, markup = cc.build_background_selection_message(page)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            bg_id = data.replace("char_bg_", "")
+            text, markup = cc.handle_background_selection(user_id, bg_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор метода генерации характеристик
+    if data.startswith("char_abilities_"):
+        if data == "char_abilities_standard":
+            text, markup = cc.handle_abilities_method(user_id, "standard")
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_abilities_roll":
+            text, markup = cc.handle_abilities_method(user_id, "roll")
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_abilities_pointbuy":
+            text, markup = cc.handle_abilities_method(user_id, "pointbuy")
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_abilities_confirm":
+            text, markup = cc.handle_abilities_confirm(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_abilities_reset":
+            text, markup = cc.handle_abilities_reset(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_abilities_assign_back":
+            text, markup = cc.build_abilities_assign_message(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Назначение характеристик
+    if data.startswith("char_assign_"):
+        parts = data.replace("char_assign_", "").split("_")
+        if len(parts) == 1:
+            # Показываем выбор значения
+            ability = parts[0]
+            text, markup = cc.handle_ability_assign(user_id, ability)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif len(parts) == 2:
+            # Назначаем значение
+            ability, score = parts[0], int(parts[1])
+            text, markup = cc.handle_ability_assign_value(user_id, ability, score)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Покупка очков
+    if data.startswith("char_pb_"):
+        if data == "char_pb_reset":
+            text, markup = cc.handle_pointbuy_reset(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            parts = data.replace("char_pb_", "").split("_")
+            if len(parts) == 2:
+                ability, change = parts[0], parts[1]
+                text, markup = cc.handle_pointbuy_change(user_id, ability, change)
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор навыков
+    if data == "char_skills_confirm":
+        text, markup = cc.handle_skills_confirm(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_skill_"):
+        skill = data.replace("char_skill_", "")
+        text, markup = cc.handle_skill_selection(user_id, skill)
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception as e:
+            # Игнорируем ошибку если сообщение не изменилось
+            if "not modified" not in str(e).lower():
+                raise
+        return
+    
+    # Выбор снаряжения
+    if data.startswith("char_eq_"):
+        if data == "char_eq_take_gold":
+            text, markup = cc.handle_equipment_take_gold(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_eq_gold_confirm":
+            text, markup = cc.handle_equipment_gold_confirm(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_eq_back_to_items":
+            text, markup = cc.handle_equipment_back_to_items(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_eq_reset":
+            text, markup = cc.handle_equipment_reset(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data == "char_eq_confirm":
+            text, markup = cc.handle_equipment_confirm(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif data.startswith("char_eq_opt_"):
+            option_idx = int(data.replace("char_eq_opt_", ""))
+            text, markup = cc.handle_equipment_option(user_id, option_idx)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Подтверждение заговоров (проверяем ДО char_cantrip_)
+    if data == "char_cantrips_confirm":
+        text, markup = cc.handle_cantrips_confirm(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Подтверждение заклинаний (проверяем ДО char_spell_)
+    if data == "char_spells_confirm":
+        text, markup = cc.handle_spells_confirm(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор/снятие выбора заговора
+    if data.startswith("char_cantrip_select_"):
+        cantrip_idx = int(data.replace("char_cantrip_select_", ""))
+        text, markup = cc.handle_cantrip_toggle(user_id, cantrip_idx)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Возврат к списку заговоров
+    if data.startswith("char_cantrip_back"):
+        page = 1
+        if "_" in data.replace("char_cantrip_back", ""):
+            parts = data.split("_")
+            if len(parts) > 3:
+                page = int(parts[-1])
+        text, markup = cc.build_cantrips_selection_message(user_id, page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор заговоров - просмотр деталей
+    if data.startswith("char_cantrip_"):
+        if "page" in data:
+            page = int(data.split("_")[-1])
+            text, markup = cc.build_cantrips_selection_message(user_id, page)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            # Показываем детали заговора
+            cantrip_idx = int(data.replace("char_cantrip_", ""))
+            text, markup = cc.build_cantrip_detail_message(user_id, cantrip_idx)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор/снятие выбора заклинания
+    if data.startswith("char_spell_select_"):
+        spell_idx = int(data.replace("char_spell_select_", ""))
+        text, markup = cc.handle_spell_toggle(user_id, spell_idx)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Возврат к списку заклинаний
+    if data.startswith("char_spell_back"):
+        page = 1
+        if "_" in data.replace("char_spell_back", ""):
+            parts = data.split("_")
+            if len(parts) > 3:
+                page = int(parts[-1])
+        text, markup = cc.build_spells_selection_message(user_id, page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор заклинаний - просмотр деталей
+    if data.startswith("char_spell_"):
+        if "page" in data:
+            page = int(data.split("_")[-1])
+            text, markup = cc.build_spells_selection_message(user_id, page)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            # Показываем детали заклинания
+            spell_idx = int(data.replace("char_spell_", ""))
+            text, markup = cc.build_spell_detail_message(user_id, spell_idx)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Сохранение персонажа
+    if data == "char_save":
+        text, markup = cc.handle_character_save(user_id)
+        if markup:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+        return
+    
+    # Вкладки обзора персонажа
+    if data == "char_review_stats":
+        text, markup = cc.build_review_message(user_id, "stats")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data == "char_review_abilities":
+        text, markup = cc.build_review_message(user_id, "abilities")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data == "char_review_spells":
+        text, markup = cc.build_review_message(user_id, "spells")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Список способностей для просмотра
+    if data == "char_review_ability_list":
+        text, markup = cc.build_ability_list_message(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_review_ability_page_"):
+        page = int(data.replace("char_review_ability_page_", ""))
+        text, markup = cc.build_ability_list_message(user_id, page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_review_ability_"):
+        ability_idx = int(data.replace("char_review_ability_", ""))
+        text, markup = cc.build_ability_detail_message(user_id, ability_idx)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Список заклинаний для просмотра
+    if data.startswith("char_review_spell_list_"):
+        spell_type = data.replace("char_review_spell_list_", "")
+        text, markup = cc.build_spell_list_message(user_id, spell_type)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data == "char_review_spell_list":
+        text, markup = cc.build_spell_list_message(user_id)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_review_spell_"):
+        # char_review_spell_{type}_{idx}
+        parts = data.replace("char_review_spell_", "").split("_")
+        if len(parts) >= 2:
+            spell_type = parts[0]
+            spell_idx = int(parts[1])
+            text, markup = cc.build_review_spell_detail_message(user_id, spell_type, spell_idx)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Просмотр персонажа (новый формат с вкладками)
+    if data.startswith("char_view_"):
+        char_id = data.replace("char_view_", "")
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        
+        text, markup = cc.build_saved_character_view(character, "stats")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Вкладки сохранённого персонажа
+    if data.startswith("char_saved_stats_"):
+        char_id = data.replace("char_saved_stats_", "")
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_character_view(character, "stats")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_saved_abilities_"):
+        char_id = data.replace("char_saved_abilities_", "")
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_character_view(character, "abilities")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_saved_spells_"):
+        char_id = data.replace("char_saved_spells_", "")
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_character_view(character, "spells")
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Список способностей сохранённого персонажа
+    if data.startswith("char_saved_ability_list_"):
+        char_id = data.replace("char_saved_ability_list_", "")
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_ability_list(character)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_saved_ability_page_"):
+        # char_saved_ability_page_{char_id}_{page}
+        parts = data.replace("char_saved_ability_page_", "").rsplit("_", 1)
+        char_id = parts[0]
+        page = int(parts[1])
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_ability_list(character, page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_saved_ability_"):
+        # char_saved_ability_{char_id}_{idx}
+        parts = data.replace("char_saved_ability_", "").rsplit("_", 1)
+        char_id = parts[0]
+        ability_idx = int(parts[1])
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_ability_detail(character, ability_idx)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Список заклинаний сохранённого персонажа
+    if data.startswith("char_saved_spell_list_"):
+        # char_saved_spell_list_{char_id}_{type}
+        parts = data.replace("char_saved_spell_list_", "").rsplit("_", 1)
+        char_id = parts[0]
+        spell_type = parts[1] if len(parts) > 1 else "cantrips"
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_spell_list(character, spell_type)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    if data.startswith("char_saved_spell_"):
+        # char_saved_spell_{char_id}_{type}_{idx}
+        parts = data.replace("char_saved_spell_", "").rsplit("_", 2)
+        char_id = parts[0]
+        spell_type = parts[1]
+        spell_idx = int(parts[2])
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        text, markup = cc.build_saved_spell_detail(character, spell_type, spell_idx)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # ========== ОБРАБОТЧИКИ ПОВЫШЕНИЯ УРОВНЯ ==========
+    
+    # Начало повышения уровня
+    if data.startswith("char_levelup_") and not data.startswith("char_levelup_hp_") and not data.startswith("char_levelup_confirm") and not data.startswith("char_levelup_arch_"):
+        char_id = data.replace("char_levelup_", "")
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+        
+        if character.level >= 20:
+            await query.edit_message_text("❌ Персонаж уже достиг максимального уровня (20).")
+            return
+        
+        # Создаём сессию повышения уровня
+        session = lu.create_levelup_session(user_id, character)
+        gains = lu.calculate_level_up_gains(character)
+        session.gains = gains
+        
+        # Показываем что получит персонаж
+        text = lu.format_level_up_gains(gains)
+        text += "\n\n<b>Выберите способ получения хитов:</b>"
+        
+        avg, dice = gains.hp_roll_options
+        keyboard = [
+            [InlineKeyboardButton(f"📊 Среднее (+{avg + character.con_mod})", callback_data=f"char_levelup_hp_avg_{char_id}")],
+            [InlineKeyboardButton(f"🎲 Бросок (1d{dice}+{character.con_mod})", callback_data=f"char_levelup_hp_roll_{char_id}")],
+            [InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}")]
+        ]
+        
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Выбор хитов - среднее
+    if data.startswith("char_levelup_hp_avg_"):
+        char_id = data.replace("char_levelup_hp_avg_", "")
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        session.hp_choice = "average"
+        
+        # Проверяем, нужны ли дополнительные выборы
+        gains = session.gains
+        
+        # Если есть выбор архетипа
+        if gains.archetype_choice and not session.character.archetype_name:
+            text, markup = build_archetype_list_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+        
+        # Переходим к подтверждению
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор хитов - бросок
+    if data.startswith("char_levelup_hp_roll_"):
+        char_id = data.replace("char_levelup_hp_roll_", "")
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        session.hp_choice = "roll"
+        
+        # Проверяем, нужны ли дополнительные выборы
+        gains = session.gains
+        
+        # Если есть выбор архетипа
+        if gains.archetype_choice and not session.character.archetype_name:
+            text, markup = build_archetype_list_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+        
+        # Переходим к подтверждению
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Возврат к списку архетипов
+    if data.startswith("char_lu_arlist_"):
+        char_id = data.replace("char_lu_arlist_", "")
+        
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        text, markup = build_archetype_list_message(session)
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()  # Сообщение не изменилось
+        return
+    
+    # Просмотр деталей архетипа (перед выбором)
+    if data.startswith("char_lu_arv_"):
+        # char_lu_arv_{char_id}_{idx} - используем rsplit чтобы правильно отделить idx
+        rest = data.replace("char_lu_arv_", "")
+        parts = rest.rsplit("_", 1)  # Разбиваем только по последнему _
+        char_id = parts[0]
+        arch_idx = int(parts[1]) if len(parts) > 1 else 0
+        
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        text, markup = build_archetype_detail_message(session, arch_idx)
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()
+        return
+    
+    # Выбор архетипа (подтверждение)
+    if data.startswith("char_lu_ar_"):
+        rest = data.replace("char_lu_ar_", "")
+        parts = rest.rsplit("_", 1)  # Разбиваем только по последнему _
+        char_id = parts[0]
+        arch_idx = int(parts[1]) if len(parts) > 1 else 0
+        
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        # Находим имя архетипа по индексу
+        from .character_data import get_archetypes_for_class
+        archetypes = get_archetypes_for_class(session.character.class_name)
+        arch_names = list(archetypes.keys())
+        
+        if arch_idx < len(arch_names):
+            session.selected_archetype = arch_names[arch_idx]
+        
+        # Переходим к подтверждению
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Выбор архетипа (старый формат - для совместимости)
+    if data.startswith("char_levelup_arch_"):
+        parts = data.replace("char_levelup_arch_", "").split("_", 1)
+        char_id = parts[0]
+        arch_prefix = parts[1] if len(parts) > 1 else ""
+        
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        # Находим полное имя архетипа
+        from .character_data import get_archetypes_for_class
+        archetypes = get_archetypes_for_class(session.character.class_name)
+        
+        for arch_name in archetypes.keys():
+            if arch_name.startswith(arch_prefix) or arch_prefix in arch_name:
+                session.selected_archetype = arch_name
+                break
+        
+        # Переходим к подтверждению
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+    
+    # Подтверждение повышения уровня
+    if data.startswith("char_levelup_confirm_"):
+        char_id = data.replace("char_levelup_confirm_", "")
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        
+        # Применяем повышение уровня
+        import random
+        character = session.character
+        gains = session.gains
+        
+        # Повышаем уровень
+        character.level = gains.new_level
+        from .character_data import get_proficiency_bonus
+        character.proficiency_bonus = get_proficiency_bonus(character.level)
+        
+        # Добавляем хиты
+        if session.hp_choice == "average":
+            hp_gain = gains.hp_roll_options[0] + character.con_mod
+        else:  # roll
+            dice = gains.hp_roll_options[1]
+            hp_gain = random.randint(1, dice) + character.con_mod
+        
+        hp_gain = max(1, hp_gain)  # минимум 1 HP
+        character.max_hp += hp_gain
+        character.current_hp = character.max_hp
+        character.hit_dice_remaining = character.level
+        
+        # Добавляем новые способности
+        for feature in gains.new_features:
+            character.features.append({
+                "level": gains.new_level,
+                "name": feature.get("name", ""),
+                "description": feature.get("description", "")
+            })
+        
+        # Применяем архетип
+        if session.selected_archetype:
+            character.archetype_name = session.selected_archetype
+        
+        # Обновляем информацию о заклинаниях
+        character.update_spell_info()
+        
+        # Сохраняем персонажа
+        save_character(character)
+        
+        # Удаляем сессию
+        lu.delete_levelup_session(user_id)
+        
+        text = f"🎉 <b>{character.name} повышен до {character.level} уровня!</b>\n\n"
+        text += f"❤️ HP: +{hp_gain} (всего: {character.max_hp})\n"
+        
+        if gains.new_features:
+            text += "\n<b>Новые способности:</b>\n"
+            for feature in gains.new_features:
+                text += f"• {feature.get('name', 'Способность')}\n"
+        
+        if session.selected_archetype:
+            text += f"\n🎭 <b>Архетип:</b> {session.selected_archetype}"
+        
+        keyboard = [[InlineKeyboardButton("👤 К персонажу", callback_data=f"char_view_{char_id}")]]
+        
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Подтверждение удаления (проверяем ДО char_delete_)
+    if data.startswith("char_delete_confirm_"):
+        char_id = data.replace("char_delete_confirm_", "")
+        
+        if delete_character(user_id, char_id):
+            await query.edit_message_text("✅ Персонаж удалён.")
+        else:
+            await query.edit_message_text("❌ Ошибка при удалении персонажа.")
+        return
+    
+    # Удаление персонажа - запрос подтверждения
+    if data.startswith("char_delete_"):
+        char_id = data.replace("char_delete_", "")
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Да, удалить", callback_data=f"char_delete_confirm_{char_id}")],
+            [InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}")]
+        ]
+        
+        await query.edit_message_text(
+            "⚠️ Ты уверен, что хочешь удалить этого персонажа?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Возврат к списку персонажей
+    if data == "char_list":
+        characters = load_user_characters(user_id)
+        
+        if not characters:
+            await query.edit_message_text(
+                "📜 У тебя пока нет персонажей.\n\n"
+                "Создай своего первого героя командой /createcharacter"
+            )
+            return
+        
+        text = "📜 <b>Твои персонажи:</b>\n\n"
+        
+        keyboard = []
+        for char in characters:
+            char_summary = f"{char.name} ({char.race_name} {char.class_name} {char.level})\n"
+            text += f"• {char_summary}"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"👤 {char.name}",
+                    callback_data=f"char_view_{char.id}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Создать нового", callback_data="char_create_new")])
+        
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Информационные callback
+    if data == "char_page_info":
+        await query.answer("Информация о текущей странице")
+        return
 
 
 async def class_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1283,13 +2298,16 @@ async def class_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     detail_text, markup = format_class_detail(class_key, section=section, page=page)
     
     # Разбиваем если слишком длинное (на случай если всё равно не влезло)
-    if len(detail_text) > 4096:
-        parts = split_message(detail_text, limit=4096)
-        await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
-        for part in parts[1:]:
-            await query.message.reply_text(part, parse_mode=ParseMode.HTML)
-    else:
-        await query.edit_message_text(detail_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    try:
+        if len(detail_text) > 4096:
+            parts = split_message(detail_text, limit=4096)
+            await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
+            for part in parts[1:]:
+                await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text(detail_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    except Exception:
+        await query.answer()  # Сообщение не изменилось
 
 def main() -> None:
 	token = get_bot_token()
@@ -1306,8 +2324,16 @@ def main() -> None:
 	app.add_handler(CommandHandler("races", cmd_races))
 	app.add_handler(CommandHandler("spells", cmd_spells))
 	app.add_handler(CommandHandler("classes", cmd_classes))
-    
-    # Обработчики для пагинации и выбора расы
+	
+	# Обработчики для создания и управления персонажами
+	app.add_handler(CommandHandler("createcharacter", cmd_createcharacter))
+	app.add_handler(CommandHandler("mycharacters", cmd_mycharacters))
+	app.add_handler(CommandHandler("levelup", cmd_levelup))
+	
+	# Обработчики для создания персонажей (должны быть перед общими обработчиками)
+	app.add_handler(CallbackQueryHandler(char_callback_handler, pattern="^char_"))
+	
+	# Обработчики для просмотра рас
 	app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_page_"))
 	app.add_handler(CallbackQueryHandler(race_callback, pattern="^race_"))
 	
