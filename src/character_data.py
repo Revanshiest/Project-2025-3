@@ -32,7 +32,7 @@ def load_races() -> Dict:
     if _races_cache:
         return _races_cache
     
-    races_path = DATA_PATH / "races_data.json"
+    races_path = DATA_PATH / "races_structured.json"
     try:
         with open(races_path, 'r', encoding='utf-8') as f:
             _races_cache = json.load(f)
@@ -132,7 +132,7 @@ def load_archetypes() -> Dict[str, Dict]:
     if _archetypes_cache:
         return _archetypes_cache
     
-    archetypes_dir = DATA_PATH / "class_archetips"
+    archetypes_dir = DATA_PATH / "archetypes_structured"
     if not archetypes_dir.exists():
         return {}
     

@@ -46,6 +46,7 @@ class OllamaClient:
         self.chroma_client_races = None
         self.chroma_client_spells = None
         self.chroma_client_classes = None
+        self.chroma_client_backgrounds = None
         self._init_chroma_clients()
 
     def _get_embedding_function(self):
@@ -53,12 +54,13 @@ class OllamaClient:
         return OllamaEmbeddingFunction(self.base_url, self.embedding_model)
 
     def _init_chroma_clients(self):
-        """Инициализирует Chroma клиентов для БД рас, заклинаний и классов"""
+        """Инициализирует Chroma клиентов для БД рас, заклинаний, классов и предысторий"""
         try:
-            races_db_path = Path("data_pars/chroma_races")
-            spells_db_path = Path("data_pars/chroma_spells")
-            classes_db_path = Path("data_pars/chroma_classes")
-            
+            races_db_path = Path("data_pars/VectorDB/chroma_races")
+            spells_db_path = Path("data_pars/VectorDB/chroma_spells")
+            classes_db_path = Path("data_pars/VectorDB/chroma_classes")
+            backgrounds_db_path = Path("data_pars/VectorDB/chroma_backgrounds")
+
             if races_db_path.exists():
                 self.chroma_client_races = chromadb.PersistentClient(
                     path=str(races_db_path)
@@ -68,10 +70,15 @@ class OllamaClient:
                 self.chroma_client_spells = chromadb.PersistentClient(
                     path=str(spells_db_path)
                 )
-            
+
             if classes_db_path.exists():
                 self.chroma_client_classes = chromadb.PersistentClient(
                     path=str(classes_db_path)
+                )
+
+            if backgrounds_db_path.exists():
+                self.chroma_client_backgrounds = chromadb.PersistentClient(
+                    path=str(backgrounds_db_path)
                 )
         except Exception as e:
             print(f"Ошибка инициализации Chroma клиентов: {e}")
@@ -138,11 +145,25 @@ class OllamaClient:
                         break
                     except Exception:
                         continue
-                
                 # Если ни одна коллекция не найдена, создаём новую
                 if not collection:
                     collection = self.chroma_client_classes.get_or_create_collection(
                         name="classes",
+                        embedding_function=embedding_func
+                    )
+            elif section_type == "backgrounds" and self.chroma_client_backgrounds:
+                # Пробуем получить коллекцию 'dnd_backgrounds' или 'backgrounds'
+                collection_names = ["dnd_backgrounds", "backgrounds"]
+                for coll_name in collection_names:
+                    try:
+                        collection = self.chroma_client_backgrounds.get_collection(name=coll_name)
+                        print(f"✅ Используем коллекцию '{coll_name}'")
+                        break
+                    except Exception:
+                        continue
+                if not collection:
+                    collection = self.chroma_client_backgrounds.get_or_create_collection(
+                        name="backgrounds",
                         embedding_function=embedding_func
                     )
             else:
