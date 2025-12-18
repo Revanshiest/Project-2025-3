@@ -4,7 +4,18 @@ Character Creation Module - Пошаговое создание персонаж
 from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+try:
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+except Exception:
+    # Тестовый / fallback режим: простые заглушки, чтобы модуль можно было импортировать без зависимости
+    class InlineKeyboardButton:
+        def __init__(self, text, callback_data=None):
+            self.text = text
+            self.callback_data = callback_data
+
+    class InlineKeyboardMarkup:
+        def __init__(self, keyboard):
+            self.inline_keyboard = keyboard
 
 from .character_creator import (
     Character, CreationSession, CreationStep,
@@ -124,78 +135,93 @@ def build_race_detail_message(race_idx: int) -> Tuple[str, InlineKeyboardMarkup]
     
     race_name = race_names[race_idx]
     race_data = get_race_by_name(race_name)
-    
+
     if not race_data:
         return "❌ Данные расы не найдены.", None
-    
+
     data = race_data["data"]
-    
-    # Формируем текст
-    text = f"🎭 <b>{race_name}</b>\n\n"
-    
-    # Базовые характеристики
-    if "Увеличение характеристик" in data:
-        text += f"📊 <b>Характеристики:</b> {data['Увеличение характеристик']}\n"
-    if "Скорость" in data:
-        text += f"🏃 <b>Скорость:</b> {data['Скорость']}\n"
-    if "Размер" in data:
-        text += f"📏 <b>Размер:</b> {data['Размер']}\n"
-    if "Возраст" in data:
-        text += f"⏳ <b>Возраст:</b> {data['Возраст']}\n"
-    if "Языки" in data or "Язык" in data:
-        lang = data.get("Языки", data.get("Язык", ""))
-        text += f"🗣️ <b>Языки:</b> {lang}\n"
-    
-    text += "\n"
-    
-    # Описание (первые секции)
-    description_added = False
-    for key, value in data.items():
-        # Пропускаем технические поля
-        if key in ["Увеличение характеристик", "Скорость", "Размер", "Возраст", "Языки", "Язык", "Мировоззрение"]:
-            continue
-        
-        # Если это список параграфов - описание
-        if isinstance(value, list) and value and isinstance(value[0], str):
-            if not description_added:
-                text += f"<b>📖 {key}:</b>\n"
-                # Берём первый параграф
-                first_para = value[0]
-                if len(first_para) > 400:
-                    first_para = first_para[:400] + "..."
-                text += f"{first_para}\n\n"
-                description_added = True
-                break
-    
-    # Особые способности
-    abilities = []
-    ability_keys = ["Тёмное зрение", "Темное зрение", "Полёт", "Полет", "Дыхание", 
-                   "Сопротивление", "Иммунитет", "Когти", "Укус"]
-    for key in data.keys():
-        for ab_key in ability_keys:
-            if ab_key.lower() in key.lower():
-                abilities.append(key)
-                break
-    
-    if abilities:
-        text += "<b>⚡ Особые способности:</b>\n"
-        for ab in abilities[:5]:
-            ab_value = data[ab]
-            if isinstance(ab_value, str):
-                short_desc = ab_value[:80] + "..." if len(ab_value) > 80 else ab_value
-                text += f"  • <b>{ab}:</b> {short_desc}\n"
-            else:
-                text += f"  • {ab}\n"
-    
+
+    # Форматируем текст через вспомогательную функцию (чтобы можно было тестировать отдельно)
+    text = format_race_detail_text(race_name, data)
+
     # Вычисляем страницу для возврата
     page = (race_idx // 8) + 1
-    
+
     keyboard = [
         [InlineKeyboardButton(f"✅ Выбрать {race_name}", callback_data=f"char_race_select_{race_idx}")],
         [InlineKeyboardButton("🔙 К списку рас", callback_data=f"char_race_page_{page}")]
     ]
-    
+
     return text, InlineKeyboardMarkup(keyboard)
+
+
+def format_race_detail_text(race_name: str, data: dict) -> str:
+    """Сформировать текст описания расы без зависимостей от telegram (для тестирования)."""
+    text = f"🎭 <b>{race_name}</b>\n\n"
+
+    # Базовая информация
+    age = data.get("age") or data.get("Возраст")
+    size = data.get("size") or data.get("Размер")
+    speed = data.get("speed") or data.get("Скорость")
+    languages = data.get("languages") or data.get("Языки") or data.get("language")
+    asi = data.get("ability_score_increase") or data.get("Увеличение характеристик")
+
+    if asi:
+        text += f"📊 <b>Характеристики:</b> {asi}\n"
+    if speed:
+        if isinstance(speed, dict):
+            speed_str = ", ".join(f"{k}: {v}" for k, v in speed.items())
+        else:
+            speed_str = str(speed)
+        text += f"🏃 <b>Скорость:</b> {speed_str}\n"
+    if size:
+        text += f"📏 <b>Размер:</b> {size}\n"
+    if age:
+        text += f"⏳ <b>Возраст:</b> {age}\n"
+    if languages:
+        if isinstance(languages, list):
+            lang = ", ".join(languages)
+        else:
+            lang = str(languages)
+        text += f"🗣️ <b>Языки:</b> {lang}\n"
+
+    text += "\n"
+
+    # Описание: используем traits (имя + описание) если есть
+    traits = data.get("traits") or data.get("особенности") or data.get("traits_list")
+    if traits and isinstance(traits, list):
+        text += "<b>📖 Особенности и черты:</b>\n"
+        for t in traits[:5]:
+            if isinstance(t, dict):
+                tname = t.get("name") or t.get("Название")
+                tdesc = t.get("description") or t.get("Описание") or ""
+                if tname:
+                    tdesc_short = tdesc[:300] + "..." if len(tdesc) > 300 else tdesc
+                    text += f"  • <b>{tname}:</b> {tdesc_short}\n"
+                else:
+                    # если элемент — строка
+                    text += f"  • {str(t)[:300]}\n"
+            else:
+                text += f"  • {str(t)[:300]}\n"
+        text += "\n"
+    else:
+        # Если нет traits, попробуем найти другие описания
+        for candidate in ["description", "Описание", "summary"]:
+            val = data.get(candidate)
+            if isinstance(val, str) and val:
+                txt = val if len(val) < 800 else val[:800] + "..."
+                text += f"<b>📖 Описание:</b>\n{txt}\n\n"
+                break
+
+    # Спец. поля: сопротивления, иммунитеты
+    resist = data.get("resistances") or data.get("Сопротивление")
+    immun = data.get("immunities") or data.get("Иммунитет")
+    if resist:
+        text += f"🛡️ <b>Сопротивления:</b> {', '.join(resist)}\n"
+    if immun:
+        text += f"⚠️ <b>Иммунитеты:</b> {', '.join(immun)}\n"
+
+    return text
 
 
 def handle_race_selection(user_id: int, race_idx: int) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
@@ -1591,6 +1617,23 @@ def build_abilities_tab(char: Character) -> str:
             else:
                 lines.append(f"  • {name}")
         lines.append("")
+    # Отображаем активные гранты/использования
+    if char.granted_abilities:
+        lines.append(f"<b>🔔 Активные способности и использования:</b>")
+        for gid, g in char.granted_abilities.items():
+            name = g.get("name", gid)
+            uses_total = g.get("uses_total")
+            uses_remaining = g.get("uses_remaining")
+            recharge = g.get("recharge")
+            action_type = g.get("action_type")
+            if uses_total is not None:
+                lines.append(f"  • {name}: {uses_remaining}/{uses_total} (перезарядка: {recharge or '—'})")
+            else:
+                # show meta grants if no limited uses
+                meta = g.get("meta")
+                meta_str = ", ".join([f"{k}: {v}" for k, v in (meta or {}).items()])
+                lines.append(f"  • {name}: {meta_str if meta_str else 'есть'}")
+        lines.append("")
     
     # Расовые черты
     if char.racial_traits:
@@ -1739,6 +1782,24 @@ def build_ability_detail_message(user_id: int, ability_idx: int) -> Tuple[str, I
     if len(description) > 3800:
         description = description[:3800] + "..."
     text += description
+    
+    # Если у этой способности есть зарегистрированные использования — показываем их и кнопку использования
+    # Находим grant по имени
+    grant_entry = None
+    for gid, g in char.granted_abilities.items():
+        if g.get("name") == name:
+            grant_entry = (gid, g)
+            break
+    if grant_entry:
+        gid, g = grant_entry
+        uses_total = g.get("uses_total")
+        uses_remaining = g.get("uses_remaining")
+        recharge = g.get("recharge")
+        text += "\n\n"
+        if uses_total is not None:
+            text += f"<b>🔔 Использований:</b> {uses_remaining}/{uses_total} (перезарядка: {recharge or '—'})\n"
+        else:
+            text += f"<b>🔔 Особенность:</b> {', '.join([f'{k}: {v}' for k,v in (g.get('meta') or {}).items()])}\n"
     
     keyboard = [
         [InlineKeyboardButton("🔙 К списку способностей", callback_data="char_review_ability_list")],

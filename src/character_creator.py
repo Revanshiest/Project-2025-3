@@ -137,6 +137,9 @@ class Character:
     
     # Черты расы
     racial_traits: List[str] = field(default_factory=list)
+
+    # Выданные способности/гранты (id -> {name, uses_total, uses_remaining, recharge, action_type, description, source})
+    granted_abilities: Dict[str, Dict] = field(default_factory=dict)
     
     # Черты предыстории
     personality_traits: List[str] = field(default_factory=list)
@@ -227,6 +230,7 @@ class Character:
         # Преобразуем CharacterSpells в dict
         if isinstance(data.get("spells"), dict):
             pass  # уже словарь
+        # granted_abilities уже словарь
         return data
     
     @classmethod
@@ -238,7 +242,7 @@ class Character:
             spells = CharacterSpells(**spells_data)
         else:
             spells = CharacterSpells()
-        
+        # granted_abilities остаются как словарь в data
         char = cls(**data)
         char.spells = spells
         return char
@@ -379,16 +383,21 @@ def apply_racial_bonuses(character: Character, race_data: Dict):
             character.languages.append("Общий")
     
     # Особенности расы
-    for key, value in race_data.items():
-        if key not in ["Увеличение характеристик", "Возраст", "Мировоззрение", 
-                       "Размер", "Скорость", "Язык", "Языки"]:
-            if isinstance(value, str) and value:
-                # Сохраняем полное описание расовой черты
-                character.racial_traits.append(f"{key}: {value}")
-            elif isinstance(value, list) and value:
-                # Объединяем все элементы списка
-                trait_text = " ".join(str(v) for v in value)
-                character.racial_traits.append(f"{key}: {trait_text}")
+    # Особенности расы: берем только поле 'traits' (имена и описания)
+    traits = race_data.get("traits") or race_data.get("особенности") or []
+    if traits and isinstance(traits, list):
+        for t in traits:
+            if isinstance(t, dict):
+                tname = t.get("name") or t.get("Название") or ""
+                tdesc = t.get("description") or t.get("Описание") or ""
+                if tname and tdesc:
+                    character.racial_traits.append(f"{tname}: {tdesc}")
+                elif tname:
+                    character.racial_traits.append(tname)
+                elif tdesc:
+                    character.racial_traits.append(tdesc)
+            elif isinstance(t, str):
+                character.racial_traits.append(t)
 
 
 # ========== ПРИМЕНЕНИЕ КЛАССА ==========

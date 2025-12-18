@@ -10,6 +10,7 @@ from .character_creator import (
     Character, CharacterSpells, save_character,
     apply_class_features
 )
+from .character_creation import InlineKeyboardButton, InlineKeyboardMarkup
 from .character_data import (
     get_class_by_id, get_archetypes_for_class,
     get_spellcasting_info, is_spellcaster, get_spells_for_class,
@@ -59,6 +60,8 @@ class LevelUpGains:
     # Особые выборы
     expertise_choice: bool = False
     expertise_count: int = 0
+    # Выборы, требуемые архетипом (список словарей с {id,name,type,count,options})
+    archetype_feature_choices: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -77,6 +80,8 @@ class LevelUpSession:
     selected_spells: List[str] = field(default_factory=list)
     selected_cantrips: List[str] = field(default_factory=list)
     selected_expertise: List[str] = field(default_factory=list)
+    # Выбранные опции архетипных способностей: feature_id -> list of chosen options
+    selected_archetype_choices: Dict[str, List[str]] = field(default_factory=dict)
     
     # Пагинация
     current_page: int = 1
@@ -136,6 +141,9 @@ def calculate_level_up_gains(character: Character) -> LevelUpGains:
                 "name": feature.get("name", ""),
                 "name_en": feature.get("name_en", ""),
                 "description": feature.get("description", "")
+                ,
+                "usage": feature.get("usage"),
+                "grants": feature.get("grants")
             }
             
             # Проверяем, это выбор архетипа?
@@ -152,32 +160,9 @@ def calculate_level_up_gains(character: Character) -> LevelUpGains:
             
             gains.new_features.append(feature_info)
     
-    # Проверяем архетипные способности
+    # Проверяем архетипные способности (если архетип уже выбран)
     if character.archetype_name:
-        archetypes = get_archetypes_for_class(character.class_name)
-        archetype_data = archetypes.get(character.archetype_name, {})
-        
-        # Способности архетипа для этого уровня
-        archetype_skills = archetype_data.get("skills", {})
-        level_skills = archetype_skills.get(str(new_level), [])
-        for skill_desc in level_skills:
-            skill_text = skill_desc if isinstance(skill_desc, str) else str(skill_desc)
-            # Извлекаем имя способности
-            skill_name = skill_text.split('.')[0][:50] if '.' in skill_text else skill_text[:50]
-            gains.new_features.append({
-                "name": f"[{character.archetype_name}] {skill_name}",
-                "description": skill_text
-            })
-        
-        # Заклинания архетипа для этого уровня (добавляем как способности)
-        archetype_spells = archetype_data.get("spells", {})
-        level_spells = archetype_spells.get(str(new_level), [])
-        if level_spells:
-            spells_list = ", ".join(level_spells) if isinstance(level_spells, list) else str(level_spells)
-            gains.new_features.append({
-                "name": f"[{character.archetype_name}] Заклинания архетипа",
-                "description": f"Вы получаете доступ к следующим заклинаниям архетипа: {spells_list}. Эти заклинания всегда считаются подготовленными."
-            })
+        add_archetype_features_to_gains(gains, character.class_name, character.archetype_name)
     
     # Заклинания
     if is_spellcaster(character.class_id):
@@ -216,6 +201,160 @@ def calculate_level_up_gains(character: Character) -> LevelUpGains:
             gains.expertise_count = 2
     
     return gains
+
+
+def build_levelup_cantrips_message(session: LevelUpSession, page: int = 1):
+    """Построить сообщение выбора заговоров при повышении уровня"""
+    character = session.character
+    # ensure selected_cantrips exists
+    if not isinstance(session.selected_cantrips, list):
+        session.selected_cantrips = []
+
+    # Ensure spell info up to date
+    character.update_spell_info()
+    # При повышении уровня количество выбираемых кантрипов задаётся в gains
+    max_cantrips = getattr(session.gains, "new_cantrips", 0)
+
+    if max_cantrips == 0:
+        return None, None
+
+    # Получаем доступные заговоры
+    class_spells = get_spells_for_class(character.class_id, max_level=1)
+    available_cantrips = class_spells.get("cantrips", class_spells.get("0", []))
+    session.available_cantrips = available_cantrips
+
+    remaining = max_cantrips - len(session.selected_cantrips)
+
+    # Пагинация
+    page_size = 10
+    total = len(available_cantrips)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    current_page = min(max(1, page), total_pages)
+    start = (current_page - 1) * page_size
+    end = start + page_size
+    slice_cantrips = available_cantrips[start:end]
+
+    text = f"✨ <b>Выбери заговоры</b>\n\n"
+    text += f"Класс: {character.class_name}\n"
+    text += f"Осталось выбрать: {remaining} из {max_cantrips}\n"
+    text += f"Страница {current_page}/{total_pages}\n\n"
+
+    if session.selected_cantrips:
+        text += "<b>Выбрано:</b>\n"
+        for s in session.selected_cantrips[:5]:
+            text += f"• {s}\n"
+        if len(session.selected_cantrips) > 5:
+            text += f"  ...и ещё {len(session.selected_cantrips) - 5}\n"
+        text += "\n"
+
+    keyboard = []
+    for idx, cantrip in enumerate(slice_cantrips):
+        global_idx = start + idx
+        prefix = "✅ " if cantrip in session.selected_cantrips else ""
+        display_name = cantrip if len(cantrip) <= 30 else cantrip[:27] + "..."
+        keyboard.append([InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"char_lu_cantrip_{global_idx}")])
+
+    nav_row = []
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"char_lu_cantrip_page_{current_page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="char_page_info"))
+    if current_page < total_pages:
+        nav_row.append(InlineKeyboardButton("➡️", callback_data=f"char_lu_cantrip_page_{current_page + 1}"))
+    keyboard.append(nav_row)
+
+    if len(session.selected_cantrips) == max_cantrips:
+        keyboard.append([InlineKeyboardButton("✅ Подтвердить", callback_data="char_lu_cantrips_confirm")])
+    elif len(session.selected_cantrips) > 0:
+        keyboard.append([InlineKeyboardButton(f"Выбрано {len(session.selected_cantrips)}/{max_cantrips}", callback_data="char_page_info")])
+
+    keyboard.append([InlineKeyboardButton("❌ Отменить", callback_data=f"char_view_{character.id}")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def handle_levelup_cantrip_toggle(session: LevelUpSession, cantrip_idx: int):
+    """Переключить выбор заговора в сессии повышения уровня"""
+    if not hasattr(session, 'available_cantrips') or cantrip_idx >= len(session.available_cantrips):
+        return None, None
+    cantrip = session.available_cantrips[cantrip_idx]
+    max_cantrips = session.character.spells.max_cantrips
+    if cantrip in session.selected_cantrips:
+        session.selected_cantrips.remove(cantrip)
+    else:
+        if len(session.selected_cantrips) < max_cantrips:
+            session.selected_cantrips.append(cantrip)
+    return build_levelup_cantrips_message(session, page= (cantrip_idx // 10) + 1)
+
+
+def build_levelup_spells_message(session: LevelUpSession, page: int = 1):
+    """Построить сообщение выбора новых заклинаний (1 уровень) при повышении"""
+    character = session.character
+    if not isinstance(session.selected_spells, list):
+        session.selected_spells = []
+
+    max_spells = session.gains.new_spells_known
+    if max_spells == 0 and not character.spells.spellbook:
+        return None, None
+
+    class_spells = get_spells_for_class(character.class_id, max_level=1)
+    available_spells = class_spells.get("1", [])
+    session.available_spells = {"1": available_spells}
+
+    page_size = 10
+    total = len(available_spells)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    current_page = min(max(1, page), total_pages)
+    start = (current_page - 1) * page_size
+    end = start + page_size
+    slice_spells = available_spells[start:end]
+
+    text = f"📜 <b>Выбери заклинания {character.class_name} (1 ур.)</b>\n\n"
+    text += f"Осталось выбрать: {max_spells - len(session.selected_spells)} из {max_spells}\n"
+    text += f"Страница {current_page}/{total_pages}\n\n"
+
+    if session.selected_spells:
+        text += "<b>Выбрано:</b>\n"
+        for s in session.selected_spells[:5]:
+            text += f"• {s}\n"
+        if len(session.selected_spells) > 5:
+            text += f"  ...и ещё {len(session.selected_spells) - 5}\n"
+        text += "\n"
+
+    keyboard = []
+    for idx, sp in enumerate(slice_spells):
+        global_idx = start + idx
+        prefix = "✅ " if sp in session.selected_spells else ""
+        display_name = sp if len(sp) <= 30 else sp[:27] + "..."
+        keyboard.append([InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"char_lu_spell_{global_idx}")])
+
+    nav_row = []
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"char_lu_spell_page_{current_page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="char_page_info"))
+    if current_page < total_pages:
+        nav_row.append(InlineKeyboardButton("➡️", callback_data=f"char_lu_spell_page_{current_page + 1}"))
+    keyboard.append(nav_row)
+
+    if len(session.selected_spells) == max_spells:
+        keyboard.append([InlineKeyboardButton("✅ Подтвердить", callback_data="char_lu_spells_confirm")])
+    elif len(session.selected_spells) > 0:
+        keyboard.append([InlineKeyboardButton(f"Выбрано {len(session.selected_spells)}/{max_spells}", callback_data="char_page_info")])
+
+    keyboard.append([InlineKeyboardButton("❌ Отменить", callback_data=f"char_view_{character.id}")])
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def handle_levelup_spell_toggle(session: LevelUpSession, spell_idx: int):
+    if not hasattr(session, 'available_spells') or spell_idx >= len(session.available_spells.get("1", [])):
+        return None, None
+    spell = session.available_spells.get("1")[spell_idx]
+    max_spells = session.gains.new_spells_known
+    if spell in session.selected_spells:
+        session.selected_spells.remove(spell)
+    else:
+        if len(session.selected_spells) < max_spells:
+            session.selected_spells.append(spell)
+    return build_levelup_spells_message(session, page=(spell_idx // 10) + 1)
 
 
 def format_level_up_gains(gains: LevelUpGains) -> str:
@@ -269,6 +408,83 @@ def format_level_up_gains(gains: LevelUpGains) -> str:
     return "\n".join(lines)
 
 
+def add_archetype_features_to_gains(gains: LevelUpGains, class_name: str, archetype_name: str):
+    """Добавить в gains особенности выбранного архетипа для уровня gains.new_level.
+
+    Эта функция безопасна для повторного вызова (проверяет на дубликаты по имени).
+    """
+    from .character_data import get_archetypes_for_class
+
+    archetypes = get_archetypes_for_class(class_name)
+    archetype_data = archetypes.get(archetype_name, {})
+    if not archetype_data:
+        return
+
+    level = str(gains.new_level)
+    features = archetype_data.get("features", {})
+    level_feats = features.get(level, [])
+
+    # Добавить каждую способность, избегая дубликатов
+    existing_names = {f.get("name") for f in gains.new_features}
+    for feat in level_feats:
+        if isinstance(feat, dict):
+            fname = feat.get("name") or feat.get("id") or "Архетипная способность"
+            fdesc = feat.get("description", "")
+            display_name = f"[{archetype_name}] {fname}"
+            if display_name not in existing_names:
+                gains.new_features.append({"name": display_name, "description": fdesc})
+                existing_names.add(display_name)
+
+            grants = feat.get("grants", {}) or {}
+            if "spells" in grants:
+                spells_list = grants["spells"]
+                spells_str = ", ".join(spells_list) if isinstance(spells_list, list) else str(spells_list)
+                note_name = f"[{archetype_name}] Заклинания архетипа"
+                if note_name not in existing_names:
+                    gains.new_features.append({
+                        "name": note_name,
+                        "description": f"Вы получаете доступ к заклинаниям архетипа: {spells_str}. Эти заклинания считаются подготовленными."
+                    })
+                    existing_names.add(note_name)
+            other_grants = {k: v for k, v in grants.items() if k != "spells"}
+            if other_grants:
+                note_name = f"[{archetype_name}] Доп. гранты"
+                if note_name not in existing_names:
+                    gains.new_features.append({"name": note_name, "description": str(other_grants)})
+                    existing_names.add(note_name)
+        # Если у способности есть выборы для игрока — добавляем описания для UI
+        choices = feat.get("choices")
+        if choices:
+            choice_entry = {
+                "feature_id": feat.get("id") or feat.get("name") or "",
+                "feature_name": feat.get("name") or feat.get("id") or "",
+                "type": choices.get("type"),
+                "count": choices.get("count", 1),
+                "options": []
+            }
+            # Опции могут быть указаны прямо в 'from' или ссылаться на grants
+            opts = choices.get("from")
+            if isinstance(opts, list):
+                choice_entry["options"] = opts
+            elif isinstance(opts, str):
+                # Ссылка на поле grants (например, 'environment_choice')
+                ref = opts
+                if isinstance(grants.get(ref), list):
+                    choice_entry["options"] = grants.get(ref)
+                else:
+                    # Попробуем взять из grants[ref] если это словарь
+                    val = grants.get(ref)
+                    if isinstance(val, dict):
+                        choice_entry["options"] = list(val.keys())
+                    else:
+                        choice_entry["options"] = []
+
+            # Добавляем в gains
+            gains.archetype_feature_choices.append(choice_entry)
+            gains.feature_choice = True
+
+
+
 # ========== ПРИМЕНЕНИЕ ПОВЫШЕНИЯ УРОВНЯ ==========
 
 def apply_level_up(session: LevelUpSession) -> Character:
@@ -299,6 +515,11 @@ def apply_level_up(session: LevelUpSession) -> Character:
             "name": feature.get("name", ""),
             "description": feature.get("description", "")
         })
+        # Если способность имеет использование (usage) — зарегистрировать грант
+        usage = feature.get("usage")
+        grants = feature.get("grants")
+        if usage or (grants and any(isinstance(v, dict) or isinstance(v, (int, str)) for v in grants.values())):
+            add_grant_from_feature(character, feature, source="class", level=gains.new_level)
     
     # Применяем повышение характеристик
     if gains.ability_score_improvement and session.selected_abilities:
@@ -326,29 +547,63 @@ def apply_level_up(session: LevelUpSession) -> Character:
                     "description": arch_desc
                 })
             
-            # Добавляем способности архетипа для текущего уровня
-            arch_skills = archetype_data.get("skills", {})
-            level_skills = arch_skills.get(str(gains.new_level), [])
-            for skill in level_skills:
-                skill_text = skill if isinstance(skill, str) else str(skill)
-                # Извлекаем имя способности из начала текста (до первой точки или 50 символов)
-                skill_name = skill_text.split('.')[0][:50] if '.' in skill_text else skill_text[:50]
-                character.features.append({
-                    "level": gains.new_level,
-                    "name": f"[{session.selected_archetype}] {skill_name}",
-                    "description": skill_text
-                })
-            
-            # Добавляем заклинания архетипа как особые способности
-            arch_spells = archetype_data.get("spells", {})
-            level_spells = arch_spells.get(str(gains.new_level), [])
-            if level_spells:
-                spells_list = ", ".join(level_spells) if isinstance(level_spells, list) else str(level_spells)
-                character.features.append({
-                    "level": gains.new_level,
-                    "name": f"[{session.selected_archetype}] Заклинания архетипа",
-                    "description": f"Вы получаете доступ к следующим заклинаниям архетипа: {spells_list}. Эти заклинания всегда считаются подготовленными и не учитываются при подсчёте количества подготовленных заклинаний."
-                })
+            # Добавляем способности архетипа (структура 'features')
+            arch_features = archetype_data.get("features", {})
+            level_feats = arch_features.get(str(gains.new_level), [])
+            for feat in level_feats:
+                if isinstance(feat, dict):
+                    fname = feat.get("name") or feat.get("id") or "Архетипная способность"
+                    fdesc = feat.get("description", "")
+                    character.features.append({
+                        "level": gains.new_level,
+                        "name": f"[{session.selected_archetype}] {fname}",
+                        "description": fdesc
+                    })
+
+                    # Если грант содержит заклинания — добавляем их в prepared_spells
+                    grants = feat.get("grants", {}) or {}
+                    if "spells" in grants:
+                        spells = grants["spells"]
+                        if isinstance(spells, list):
+                            character.spells.prepared_spells.extend(spells)
+                        else:
+                            character.spells.prepared_spells.append(str(spells))
+                        # Также добавим в features заметку о новых заклинаниях
+                        spells_list = ", ".join(spells) if isinstance(spells, list) else str(spells)
+                        character.features.append({
+                            "level": gains.new_level,
+                            "name": f"[{session.selected_archetype}] Заклинания архетипа",
+                            "description": f"Вы получаете доступ к заклинаниям архетипа: {spells_list}. Эти заклинания считаются подготовленными."
+                        })
+                    # Другие гранты можно зафиксировать как описание
+                    other_grants = {k: v for k, v in grants.items() if k != "spells"}
+                    if other_grants:
+                        character.features.append({
+                            "level": gains.new_level,
+                            "name": f"[{session.selected_archetype}] Доп. гранты",
+                            "description": str(other_grants)
+                        })
+                    # Регистрируем использования / гранты
+                    add_grant_from_feature(character, feat, source=f"archetype:{session.selected_archetype}", level=gains.new_level)
+                    # Если пользователь выбирал опции для этой способности — применяем их
+                    fid = feat.get("id") or feat.get("name")
+                    user_choices = session.selected_archetype_choices.get(fid, [])
+                    for uc in user_choices:
+                        character.features.append({
+                            "level": gains.new_level,
+                            "name": f"[{session.selected_archetype}] Выбор: {fid}",
+                            "description": f"Выбран вариант: {uc}"
+                        })
+                        # Если grants содержит маппинг для этого выбора — применим соответствующий грант
+                        # Ищем в grants словарь где ключи совпадают с опцией
+                        for gk, gv in grants.items():
+                            if isinstance(gv, dict) and uc in gv:
+                                character.features.append({
+                                    "level": gains.new_level,
+                                    "name": f"[{session.selected_archetype}] Грант {gk} для {uc}",
+                                    "description": str(gv.get(uc))
+                                })
+                            # Если grants[gk] — список или простое значение, и не зависит от опции, его уже добавили выше
     
     # Добавляем заговоры
     if session.selected_cantrips:
@@ -374,6 +629,54 @@ def roll_hp_for_level(hit_dice: str, con_mod: int) -> int:
     dice_value = int(hit_dice.split("d")[1])
     roll = random.randint(1, dice_value)
     return max(1, roll + con_mod)
+
+
+def add_grant_from_feature(character: Character, feat: Dict, source: str = "", level: int = 0):
+    """Добавить в character.granted_abilities запись о гранте/использовании из feat.
+
+    feat может содержать поля 'usage' (dict) и 'grants' (dict)."""
+    fid = feat.get("id") or feat.get("name")
+    if not fid:
+        return
+
+    # Нормализуем id как строку
+    fid = str(fid)
+    name = feat.get("name") or fid
+    usage = feat.get("usage") or {}
+    grants = feat.get("grants") or {}
+
+    entry = character.granted_abilities.get(fid, {})
+    # If entry exists, don't overwrite uses_remaining unless it's empty
+    if not entry:
+        entry = {
+            "name": name,
+            "source": source,
+            "level_acquired": level,
+            "description": feat.get("description", ""),
+            "uses_total": None,
+            "uses_remaining": None,
+            "recharge": None,
+            "action_type": None,
+            "meta": {}
+        }
+
+    # usage: type/uses/recharge/action_type
+    if usage:
+        # Тип может быть 'long_rest', 'short_rest', '24_hours' etc.
+        entry["recharge"] = usage.get("recharge") or usage.get("type")
+        entry["action_type"] = usage.get("action_type") or usage.get("type")
+        if usage.get("uses") is not None:
+            entry["uses_total"] = int(usage.get("uses"))
+            # установим remaining только если ещё не установлено
+            if entry.get("uses_remaining") is None:
+                entry["uses_remaining"] = int(usage.get("uses"))
+
+    # grants may contain keys like extra_attacks, immunity, spells, temp_hp_on_rage
+    # сохраняем их в meta для справки
+    if grants:
+        entry.setdefault("meta", {}).update(grants)
+
+    character.granted_abilities[fid] = entry
 
 
 def get_average_hp_for_level(hit_dice: str, con_mod: int) -> int:

@@ -1,35 +1,17 @@
 import os
-from typing import Final
+from typing import Final, Dict, List, Optional
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
-from telegram.ext import MessageHandler, filters, CallbackQueryHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import MessageHandler, filters, CallbackQueryHandler, Application, ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, KeyboardButton, ReplyKeyboardMarkup, Update
 from .ollama import OllamaClient
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
-
-from .texts import (
-	START_TEXT, 
-	HELP_TEXT, 
-	RULES_TEXT, 
-	DICE_RULES_TEXT,
-	COMBAT_RULES_TEXT_PART1,
-	COMBAT_RULES_TEXT_PART2,
-	COMBAT_RULES_TEXT_PART3,
-	COMBAT_RULES_TEXT_PART4,
-	STATS_TEXT_PART1,
-	STATS_TEXT_PART2,
-	GLOSSARY_TEXT_PART1,
-	GLOSSARY_TEXT_PART2,
-	RACES_SHORT_DESCRIPTIONS
-)
-
+from .texts import *
 from . import character_creation as cc
 from .character_creator import load_user_characters, format_character_summary, delete_character, save_character, get_character_by_id
-from . import level_up as lu
+from . import level_up as lu  # Изменено с from . import level_up as lu
 
 
 ollama_client = OllamaClient()
@@ -40,6 +22,27 @@ CLASSES_LIST: List[str] = []  # Список названий классов
 CLASS_KEY_MAP: Dict[str, str] = {}  # Маппинг коротких ID -> полные ключи классов
 CLASS_KEY_REVERSE_MAP: Dict[str, str] = {}  # Обратный маппинг: ключ -> короткий ID
 
+# Маппинги для локализации кратких кодов
+ABILITY_NAMES = {
+    'str': 'Сила (STR)', 'dex': 'Ловкость (DEX)', 'con': 'Телосложение (CON)',
+    'int': 'Интеллект (INT)', 'wis': 'Мудрость (WIS)', 'cha': 'Харизма (CHA)'
+}
+ARMOR_NAMES = {
+    'light': 'Лёгкая броня (light)', 'medium': 'Средняя броня (medium)',
+    'heavy': 'Тяжёлая броня (heavy)', 'shields': 'Щиты (shields)'
+}
+WEAPON_NAMES = {
+    'simple': 'Простое оружие (simple)', 'martial': 'Военное оружие (martial)'
+}
+SKILL_NAMES = {
+    'acrobatics':'Акробатика', 'athletics':'Атлетика', 'perception':'Восприятие',
+    'survival':'Выживание', 'intimidation':'Запугивание', 'history':'История',
+    'insight':'Проницательность', 'animal_handling':'Обращение с животными',
+    'stealth':'Скрытность', 'arcana':'Знание (магия)', 'religion':'Религия',
+    'nature':'Природа', 'deception':'Обман', 'medicine':'Медицина',
+    'performance':'Выступление', 'persuasion':'Убеждение', 'sleight_of_hand':'Ловкость рук'
+}
+
 def load_races_data() -> dict:
     """Загрузить данные рас из JSON"""
     global RACES_DATA
@@ -47,17 +50,26 @@ def load_races_data() -> dict:
         races_path = Path(__file__).parent.parent / "data_pars" / "races_data.json"
         try:
             with open(races_path, 'r', encoding='utf-8') as f:
-                RACES_DATA = json.load(f)
+                loaded = json.load(f)
+                # Если файл хранит список объектов, преобразуем в dict по ключу source_key
+                if isinstance(loaded, list):
+                    temp: dict = {}
+                    for item in loaded:
+                        # Ожидаем, что у каждого элемента есть поле source_key или name
+                        key = item.get('source_key') or (item.get('name') or '')
+                        if isinstance(key, str):
+                            key = key.lstrip('\ufeff').strip()
+                        if key:
+                            temp[key] = item
+                    RACES_DATA = temp
+                else:
+                    RACES_DATA = loaded
         except Exception as e:
             print(f"❌ Ошибка загрузки рас: {e}")
     return RACES_DATA
 
 
 def load_races_formatted_text() -> tuple[str, list[str]]:
-    """
-    Загрузить отформатированный текст рас и первые три названия для кнопок.
-    Возвращает текст целиком и список первых трёх рас.
-    """
     races_file = Path(__file__).parent.parent / "data_pars" / "races_descriptions_formatted.txt"
     try:
         raw_text = races_file.read_text(encoding="utf-8").strip()
@@ -78,15 +90,44 @@ def load_races_formatted_text() -> tuple[str, list[str]]:
 
 
 def load_races_formatted_lines() -> list[tuple[str, str]]:
-    """
-    Прочитать отформатированный список рас и вернуть пары (имя, описание-строка).
-    Используется для пагинации списка рас.
-    """
     races_file = Path(__file__).parent.parent / "data_pars" / "races_descriptions_formatted.txt"
+    
+    # Проверяем существование файла
+    if not races_file.exists():
+        # Попробуем альтернативный путь или создать базовый список
+        races_data = load_races_data()
+        if races_data:
+            # Используем данные из JSON, если файл txt не найден
+            lines: list[tuple[str, str]] = []
+            for race_key, race_info in races_data.items():
+                # Извлекаем русское название из ключа
+                race_name = race_key
+                for i, char in enumerate(race_key):
+                    if 'A' <= char <= 'z':  # Нашли английскую букву
+                        race_name = race_key[:i].strip()
+                        break
+                # Берем первое поле как описание
+                description = ""
+                if race_info:
+                    first_key = next(iter(race_info), "")
+                    first_value = race_info.get(first_key, "")
+                    if isinstance(first_value, list):
+                        description = first_value[0] if first_value else ""
+                    else:
+                        description = str(first_value)
+                
+                lines.append((race_name, description[:50] + "..." if len(description) > 50 else description))
+            return lines
+        return []
+    
     try:
         raw_text = races_file.read_text(encoding="utf-8").strip()
+        if not raw_text:
+            print(f"❌ Файл пустой: {races_file}")
+            return []
+            
     except Exception as e:
-        print(f"❌ Ошибка чтения races_descriptions_formatted.txt: {e}")
+        print(f"❌ Ошибка чтения {races_file}: {e}")
         return []
 
     lines: list[tuple[str, str]] = []
@@ -96,7 +137,8 @@ def load_races_formatted_lines() -> list[tuple[str, str]]:
         name, _, desc = line.partition(" -")
         name = name.lstrip("\ufeff").strip()
         desc = desc.strip(" -")
-        lines.append((name, desc))
+        if name:  # Добавляем только если есть имя
+            lines.append((name, desc))
     return lines
 
 
@@ -108,19 +150,35 @@ def resolve_race_key(display_name: str) -> str | None:
     if not RACES_DATA:
         load_races_data()
 
-    for key in RACES_DATA.keys():
-        if key.startswith(display_name):
-            return key
+    # Поддерживаем как dict, так и старые случаи с list
+    if isinstance(RACES_DATA, dict):
+        for key in RACES_DATA.keys():
+            if key.startswith(display_name):
+                return key
+    elif isinstance(RACES_DATA, list):
+        for item in RACES_DATA:
+            key = item.get('source_key') or (item.get('name') or '')
+            if key and key.startswith(display_name):
+                return key
     return None
 
 
-def build_races_page(page: int, page_size: int = 5) -> tuple[str, InlineKeyboardMarkup]:
+def build_races_page(page: int, page_size: int = 10) -> tuple[str, InlineKeyboardMarkup]:
     """
     Сформировать текст и инлайн-клавиатуру для страницы списка рас.
     """
     load_races_data()
     races = load_races_formatted_lines()
     total = len(races)
+    
+    if total == 0:
+        text = "🧝 <b>Расы D&D 5e</b>\n\n"
+        text += "❌ <b>Расы не найдены!</b>\n\n"
+        text += "Пожалуйста, проверьте наличие файлов с данными."
+        
+        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="race_page_1")]]
+        return text, InlineKeyboardMarkup(keyboard)
+    
     total_pages = max(1, (total + page_size - 1) // page_size)
     current_page = min(max(1, page), total_pages)
 
@@ -128,30 +186,164 @@ def build_races_page(page: int, page_size: int = 5) -> tuple[str, InlineKeyboard
     end = start + page_size
     slice_races = races[start:end]
 
-    text_parts = [f"🎭 Доступные расы (стр. {current_page}/{total_pages})\n"]
+    # Только заголовок без списка рас
+    text = f"🧝 <b>Расы D&D 5e</b>\n"
+    text += f"Страница {current_page}/{total_pages} • Всего: {total}\n\n"
+    text += "Выберите расу для подробной информации:\n"
+    # Добавляем короткие описания для каждой расы на странице
     for name, desc in slice_races:
-        text_parts.append(f"• {name} — {desc}")
-    text = "\n".join(text_parts)
+        if desc:
+            short = desc if len(desc) <= 200 else desc[:197] + "..."
+            text += f"• <b>{name}</b> — {short}\n"
+        else:
+            text += f"• <b>{name}</b>\n"
 
     keyboard: list[list[InlineKeyboardButton]] = []
+    # Формируем кнопки в два столбца (по две кнопки в строке)
+    row: list[InlineKeyboardButton] = []
     for name, _ in slice_races:
         race_key = resolve_race_key(name)
         if race_key:
-            keyboard.append([InlineKeyboardButton(text=name, callback_data=f"race_{race_key}")])
+            # Используем короткий callback_data для экономии места
+            callback_data = f"race_detail_{race_key[:20]}" if len(race_key) > 20 else f"race_detail_{race_key}"
         else:
-            keyboard.append([InlineKeyboardButton(text=name, callback_data="race_noop")])
+            # Если не нашли ключ, используем отображаемое имя
+            callback_data = f"race_detail_{name}"
 
-    # Навигация: предыдущая / индикатор / следующая
-    prev_page = current_page - 1 if current_page > 1 else current_page
-    next_page = current_page + 1 if current_page < total_pages else current_page
+        btn = InlineKeyboardButton(text=name, callback_data=callback_data)
+        row.append(btn)
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
 
+    # Если осталась неполная строка — добавляем её
+    if row:
+        keyboard.append(row)
+
+    # Навигация (без кнопки с номером страницы)
     nav_row: list[InlineKeyboardButton] = []
-    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"race_page_{prev_page}"))
-    nav_row.append(InlineKeyboardButton(f"Стр {current_page}/{total_pages}", callback_data="race_page_info"))
-    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"race_page_{next_page}"))
-    keyboard.append(nav_row)
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Назад", callback_data=f"race_page_{current_page - 1}"))
+    
+    if current_page < total_pages:
+        if nav_row:  # Если уже есть кнопка "Назад", добавляем "Вперед" в тот же ряд
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"race_page_{current_page + 1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"race_page_{current_page + 1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
 
     return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_race_detail_page(race_key: str, page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Сформировать страницу с детальной информацией о расе с пагинацией.
+    Фиксированное количество строк (10-12) на страницу для большего количества страниц.
+    """
+    load_races_data()
+    
+    # Ищем расу в данных
+    race_data = None
+    race_name_display = race_key
+    
+    # Пытаемся найти расу по ключу
+    for key, data in RACES_DATA.items():
+        if key.startswith(race_key) or race_key in key:
+            race_data = data
+            # Извлекаем русское название из ключа
+            for i, char in enumerate(key):
+                if 'A' <= char <= 'z':  # Нашли английскую букву
+                    race_name_display = key[:i].strip()
+                    break
+            break
+    
+    # Если не нашли по ключу, ищем по русскому названию
+    if not race_data:
+        for key, data in RACES_DATA.items():
+            # Извлекаем русское название
+            race_name = key
+            for i, char in enumerate(key):
+                if 'A' <= char <= 'z':
+                    race_name = key[:i].strip()
+                    break
+            
+            if race_name == race_key:
+                race_data = data
+                race_name_display = race_name
+                break
+    
+    if not race_data:
+        return "❌ Информация о расе не найдена", InlineKeyboardMarkup([])
+    
+    # Формируем полный текст
+    full_text = f"🧝 <b>{race_name_display}</b>\n\n"
+    
+    if isinstance(race_data, dict):
+        for section_title, section_content in race_data.items():
+            if isinstance(section_content, list) and section_content:
+                full_text += f"<b>{section_title}:</b>\n"
+                for item in section_content:
+                    full_text += f"• {item}\n"
+                full_text += "\n"
+            elif isinstance(section_content, str) and section_content.strip():
+                full_text += f"<b>{section_title}:</b> {section_content}\n\n"
+    else:
+        # Если данные не в ожидаемом формате
+        full_text += str(race_data)
+    
+    # Разбиваем текст на строки
+    lines = full_text.split('\n')
+    total_lines = len(lines)
+    
+    # ФИКСИРОВАННОЕ количество строк на страницу
+    LINES_PER_PAGE = 12
+    
+    # Вычисляем общее количество страниц
+    total_pages = max(1, (total_lines + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
+    current_page = min(max(1, page), total_pages)
+    
+    # Вычисляем диапазон строк для текущей страницы
+    start_line = (current_page - 1) * LINES_PER_PAGE
+    end_line = min(start_line + LINES_PER_PAGE, total_lines)
+    
+    # Формируем текст текущей страницы
+    page_text = '\n'.join(lines[start_line:end_line])
+    
+    # Добавляем информацию о странице
+    page_text += f"\n\n📄 Страница {current_page}/{total_pages}"
+    
+    # Проверяем длину
+    if len(page_text) > 4096:
+        # Если все еще слишком длинный, принудительно укорачиваем
+        page_text = page_text[:4000] + "\n\n📝 <i>Текст продолжается на следующей странице...</i>"
+    
+    # Создаем клавиатуру
+    keyboard: list[list[InlineKeyboardButton]] = []
+    
+    # Кнопки навигации
+    nav_row: list[InlineKeyboardButton] = []
+    
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Назад", 
+                     callback_data=f"race_detail_page_{race_key}_{current_page - 1}"))
+    
+    if current_page < total_pages:
+        if nav_row:
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", 
+                         callback_data=f"race_detail_page_{race_key}_{current_page + 1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("Вперёд ▶️", 
+                         callback_data=f"race_detail_page_{race_key}_{current_page + 1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
+    
+    # Кнопка возврата к списку рас
+    keyboard.append([InlineKeyboardButton("🔙 К списку рас", callback_data="race_page_1")])
+    
+    return page_text, InlineKeyboardMarkup(keyboard)
 
 
 def split_message(text: str, limit: int = 4000) -> list[str]:
@@ -214,8 +406,11 @@ def load_spells_by_level(level: str) -> Dict:
 def get_spell_level_display_name(level: str) -> str:
     """Получить отображаемое название уровня заклинаний"""
     if level == "cantrips":
-        return "Кантрипы (Заговоры)"
-    return f"{level} уровень"
+        return "Заговоры"
+    elif level == "1":
+        return "1 уровень"
+    else:
+        return f"{level} уровень"
 
 
 def build_spells_level_selection() -> tuple[str, InlineKeyboardMarkup]:
@@ -229,10 +424,10 @@ def build_spells_level_selection() -> tuple[str, InlineKeyboardMarkup]:
     # Заговоры
     keyboard.append([InlineKeyboardButton("✨ Заговоры", callback_data="spell_level_cantrips")])
     
-    # Уровни 1-9 в две колонки
+    # Уровни 1-9 в три колонки
     levels_row: list[InlineKeyboardButton] = []
     for i in range(1, 10):
-        levels_row.append(InlineKeyboardButton(f"{i}", callback_data=f"spell_level_{i}"))
+        levels_row.append(InlineKeyboardButton(f"{i} ур.", callback_data=f"spell_level_{i}"))
         if len(levels_row) == 3:
             keyboard.append(levels_row)
             levels_row = []
@@ -242,7 +437,7 @@ def build_spells_level_selection() -> tuple[str, InlineKeyboardMarkup]:
     return text, InlineKeyboardMarkup(keyboard)
 
 
-def build_spells_page(level: str, page: int, page_size: int = 10) -> tuple[str, InlineKeyboardMarkup]:
+def build_spells_page(level: str, page: int = 1, page_size: int = 8) -> tuple[str, InlineKeyboardMarkup]:
     """
     Сформировать текст и инлайн-клавиатуру для страницы списка заклинаний уровня.
     """
@@ -250,6 +445,15 @@ def build_spells_page(level: str, page: int, page_size: int = 10) -> tuple[str, 
     spell_names = sorted(list(spells_data.keys()))
     
     total = len(spell_names)
+    if total == 0:
+        level_name = get_spell_level_display_name(level)
+        text = f"✨ <b>{level_name}</b>\n\n"
+        text += "❌ Заклинания этого уровня не найдены"
+        
+        keyboard: list[list[InlineKeyboardButton]] = []
+        keyboard.append([InlineKeyboardButton("🔙 К выбору уровня", callback_data="spell_level_select")])
+        return text, InlineKeyboardMarkup(keyboard)
+    
     total_pages = max(1, (total + page_size - 1) // page_size)
     current_page = min(max(1, page), total_pages)
     
@@ -258,42 +462,52 @@ def build_spells_page(level: str, page: int, page_size: int = 10) -> tuple[str, 
     slice_spells = spell_names[start:end]
     
     level_name = get_spell_level_display_name(level)
-    text_parts = [f"✨ <b>{level_name}</b> (стр. {current_page}/{total_pages})\n"]
-    text_parts.append(f"Всего заклинаний: {total}\n")
-    
-    for name in slice_spells:
-        text_parts.append(f"• {name}")
-    text = "\n".join(text_parts)
+    text = f"✨ <b>{level_name}</b>\n"
+    text += f"Страница {current_page}/{total_pages} • Всего: {total}\n\n"
+    text += "Выберите заклинание для подробной информации:"
     
     keyboard: list[list[InlineKeyboardButton]] = []
     
     # Кнопки заклинаний (по 2 в ряд для компактности)
-    # Используем индекс вместо имени для callback_data, чтобы избежать проблем с длиной и символами
+    # Сохраняем номер страницы в callback_data для возврата
     spell_row: list[InlineKeyboardButton] = []
     for idx, name in enumerate(slice_spells):
         # Используем глобальный индекс в отсортированном списке
         global_idx = start + idx
-        # Формат: spell_level_index (например: spell_1_5, spell_cantrips_12)
-        # Это гарантирует короткий и безопасный callback_data
-        callback_data = f"spell_{level}_{global_idx}"
+        
+        # Формат: spell_detail_{level}_{index}_{current_page}
+        callback_data = f"spell_detail_{level}_{global_idx}_{current_page}"
+        
         # Ограничиваем текст кнопки для читаемости
-        button_text = name[:25] + "..." if len(name) > 25 else name
+        button_text = name
+        if len(name) > 25:
+            # Находим последний пробел до 25 символов
+            cutoff = 22
+            if ' ' in name[:25]:
+                # Находим последний пробел до 25 символов
+                cutoff = name[:25].rfind(' ')
+                if cutoff < 15:  # Если последний пробел слишком рано
+                    cutoff = 22
+            button_text = name[:cutoff] + "..."
+        
         spell_row.append(InlineKeyboardButton(text=button_text, callback_data=callback_data))
         if len(spell_row) == 2:
             keyboard.append(spell_row)
             spell_row = []
+    
     if spell_row:
         keyboard.append(spell_row)
     
-    # Навигация: предыдущая / индикатор / следующая
-    prev_page = current_page - 1 if current_page > 1 else current_page
-    next_page = current_page + 1 if current_page < total_pages else current_page
-    
+    # Навигация (без кнопки с номером страницы)
     nav_row: list[InlineKeyboardButton] = []
-    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"spell_page_{level}_{prev_page}"))
-    nav_row.append(InlineKeyboardButton(f"Стр {current_page}/{total_pages}", callback_data="spell_page_info"))
-    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"spell_page_{level}_{next_page}"))
-    keyboard.append(nav_row)
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Назад", callback_data=f"spell_page_{level}_{current_page - 1}"))
+    
+    if current_page < total_pages:
+        nav_row.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"spell_page_{level}_{current_page + 1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
     
     # Кнопка возврата к выбору уровня
     keyboard.append([InlineKeyboardButton("🔙 К выбору уровня", callback_data="spell_level_select")])
@@ -306,36 +520,47 @@ def format_spell_detail_by_name(level: str, spell_name: str) -> str:
     spells_data = load_spells_by_level(level)
     
     if spell_name not in spells_data:
-        return f"❌ Заклинание не найдено"
+        return f"❌ Заклинание '{spell_name}' не найдено"
     
     spell_data = spells_data[spell_name]
     
     level_name = get_spell_level_display_name(level)
     text_parts = [f"✨ <b>{spell_name}</b>\n"]
-    text_parts.append(f"<i>{level_name}</i>\n")
+    text_parts.append(f"<i>{level_name}</i>\n\n")
     
     # Определяем ключ для уровня и школы
     level_school_key = None
-    for key in ["Уровень и школа", "информация"]:
+    possible_keys = ["Уровень и школа", "информация", "Информация", "Уровень"]
+    for key in possible_keys:
         if key in spell_data:
             level_school_key = key
             break
     
-    if level_school_key:
+    if level_school_key and spell_data[level_school_key]:
         text_parts.append(f"<b>{level_school_key}:</b> {spell_data[level_school_key]}\n")
     
-    # Остальные поля
+    # Остальные поля (кроме описания)
     for key, value in spell_data.items():
-        if key in ["Уровень и школа", "информация", "описание"]:
+        if key in ["Уровень и школа", "информация", "Информация", "Уровень", "описание", "Описание"]:
             continue
-        if isinstance(value, str) and value:
+        
+        if isinstance(value, str) and value.strip():
             text_parts.append(f"<b>{key}:</b> {value}\n")
         elif isinstance(value, list) and value:
-            text_parts.append(f"<b>{key}:</b> {', '.join(str(v) for v in value)}\n")
+            # Фильтруем пустые значения в списке
+            filtered_values = [str(v).strip() for v in value if str(v).strip()]
+            if filtered_values:
+                text_parts.append(f"<b>{key}:</b> {', '.join(filtered_values)}\n")
     
     # Описание в конце
-    if "описание" in spell_data:
-        text_parts.append(f"\n<b>Описание:</b>\n{spell_data['описание']}")
+    desc_key = None
+    for key in ["описание", "Описание", "description"]:
+        if key in spell_data:
+            desc_key = key
+            break
+    
+    if desc_key and spell_data[desc_key]:
+        text_parts.append(f"\n<b>Описание:</b>\n{spell_data[desc_key]}")
     
     return "\n".join(text_parts)
 
@@ -346,50 +571,15 @@ def load_classes_list() -> List[str]:
     global CLASSES_LIST
     if CLASSES_LIST:
         return CLASSES_LIST
-    
-    classes_dir = Path(__file__).parent.parent / "data_pars" / "classes"
-    if not classes_dir.exists():
-        return []
-    
-    classes = []
-    class_names_map = {}  # Для маппинга ключей к названиям
-    
-    for json_file in classes_dir.glob("*.json"):
-        if json_file.name == "classes_list.json" or json_file.name == "Классы.json":
-            continue
-        
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Извлекаем название класса из ключа
-                for key in data.keys():
-                    # Формат: "Воин—КлассыFighter" -> "Воин"
-                    # Или из name_ru в данных
-                    class_data = data[key]
-                    if isinstance(class_data, dict) and 'name_ru' in class_data:
-                        class_name = class_data['name_ru']
-                        # Убираем "—Классы" если есть
-                        if "—" in class_name:
-                            class_name = class_name.split("—")[0]
-                    else:
-                        # Парсим из ключа
-                        class_name = key.split("—")[0]
-                        # Убираем английские названия
-                        english_names = ["Fighter", "Barbarian", "Bard", "Cleric", "Druid", "Monk", 
-                                       "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard", "Inventor"]
-                        for en_name in english_names:
-                            if en_name in class_name:
-                                class_name = class_name.replace(en_name, "")
-                    
-                    if class_name and class_name.strip():
-                        class_name = class_name.strip()
-                        if class_name not in classes:
-                            classes.append(class_name)
-                            class_names_map[key] = class_name
-        except Exception as e:
-            print(f"❌ Ошибка загрузки {json_file.name}: {e}")
-    
-    CLASSES_LIST = sorted(classes)
+    # Используем централизованные функции загрузки классов из character_data
+    try:
+        from src.character_data import get_class_names
+        class_list = get_class_names()  # list of tuples (id, name)
+        CLASSES_LIST = sorted([name for _id, name in class_list])
+    except Exception as e:
+        print(f"⚠️ Ошибка при загрузке списка классов: {e}")
+        CLASSES_LIST = []
+
     return CLASSES_LIST
 
 
@@ -400,26 +590,25 @@ def load_class_data(class_name: str) -> Optional[Dict]:
     # Проверяем кэш
     if class_name in CLASSES_DATA:
         return CLASSES_DATA[class_name]
-    
-    classes_dir = Path(__file__).parent.parent / "data_pars" / "classes"
-    
-    # Ищем файл с этим классом
-    for json_file in classes_dir.glob("*.json"):
-        if json_file.name == "classes_list.json" or json_file.name == "Классы.json":
-            continue
-        
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Ищем класс в данных
-                for key, value in data.items():
-                    # Проверяем, содержит ли ключ название класса
-                    if class_name in key or (isinstance(value, dict) and value.get('name_ru', '').startswith(class_name)):
-                        CLASSES_DATA[class_name] = value
-                        return value
-        except Exception as e:
-            print(f"❌ Ошибка загрузки {json_file.name}: {e}")
-    
+    # Пытаемся найти класс по ID или по имени среди структурированных данных
+    try:
+        from src.character_data import get_class_by_id, get_class_by_name
+
+        # Сначала считаем, что передан ID
+        data = get_class_by_id(class_name)
+        if not data:
+            # Попробуем найти по русскому имени
+            data = get_class_by_name(class_name)
+
+        if data:
+            # Сохраняем в кэш по ID (если есть) и по переданному имени
+            class_id = data.get("id") or class_name
+            CLASSES_DATA[class_id] = data
+            CLASSES_DATA[class_name] = data
+            return data
+    except Exception as e:
+        print(f"⚠️ Ошибка при загрузке данных класса '{class_name}': {e}")
+
     return None
 
 
@@ -453,107 +642,92 @@ def _get_class_key_from_id(short_id: str) -> Optional[str]:
 
 def resolve_class_key(display_name: str) -> Optional[str]:
     """Найти ключ класса в данных"""
-    classes_dir = Path(__file__).parent.parent / "data_pars" / "classes"
-    
-    for json_file in classes_dir.glob("*.json"):
-        if json_file.name == "classes_list.json" or json_file.name == "Классы.json":
-            continue
-        
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                for key, value in data.items():
-                    # Проверяем по ключу - точное совпадение начала
-                    if key.startswith(display_name) or display_name in key:
-                        _register_class_key(key)
-                        return key
-                    # Проверяем по name_ru в данных
-                    if isinstance(value, dict):
-                        name_ru = value.get('name_ru', '')
-                        if name_ru:
-                            # Убираем "—Классы" для сравнения
-                            clean_name = name_ru.split("—")[0] if "—" in name_ru else name_ru
-                            if display_name == clean_name or display_name in name_ru:
-                                _register_class_key(key)
-                                return key
-        except Exception as e:
-            print(f"⚠️ Ошибка при поиске класса '{display_name}': {e}")
-            continue
-    
+    # Ищем в структурированных данных классов (id -> data)
+    try:
+        from src.character_data import load_classes_structured
+        classes = load_classes_structured()
+        for cid, data in classes.items():
+            # Сравниваем по ID
+            if display_name.lower() == cid.lower() or display_name.lower() == (data.get('name', '') or '').lower():
+                _register_class_key(cid)
+                return cid
+            # Частичное совпадение по имени
+            name = (data.get('name', '') or '')
+            if name and display_name.lower() in name.lower():
+                _register_class_key(cid)
+                return cid
+    except Exception as e:
+        print(f"⚠️ Ошибка при поиске класса '{display_name}': {e}")
+
     return None
 
-
-def build_classes_page(page: int, page_size: int = 8) -> tuple[str, InlineKeyboardMarkup]:
-    """Сформировать текст и инлайн-клавиатуру для страницы списка классов"""
+def build_classes_simple_page() -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Упрощенная страница со списком классов - все классы на одной странице
+    """
     classes = load_classes_list()
     total = len(classes)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    current_page = min(max(1, page), total_pages)
     
-    start = (current_page - 1) * page_size
-    end = start + page_size
-    slice_classes = classes[start:end]
+    # Эмодзи для классов
+    class_emojis = {
+        "Воин": "⚔️",
+        "Варвар": "🪓",
+        "Бард": "🎵",
+        "Жрец": "🙏",
+        "Волшебник": "🔮",
+        "Плут": "🗡️",
+        "Друид": "🌿",
+        "Паладин": "🛡️",
+        "Изобретатель": "⚙️",
+        "Следопыт": "🏹",
+        "Колдун": "👁️",
+        "Монах": "🥋",
+        "Чародей": "✨"
+    }
     
-    text_parts = [f"⚔️ <b>Доступные классы</b> (стр. {current_page}/{total_pages})\n"]
-    text_parts.append(f"Всего классов: {total}\n")
+    # Формируем текст
+    text = f"<b>⚔️ Классы D&D 5e</b>\n"
+    text += f"<i>Всего классов: {total}</i>\n\n"
+    text += "Выберите класс для подробной информации:"
     
-    for name in slice_classes:
-        text_parts.append(f"• {name}")
-    text = "\n".join(text_parts)
-    
-    keyboard: list[list[InlineKeyboardButton]] = []
-    
-    # Кнопки классов (по 2 в ряд для компактности)
-    class_row: list[InlineKeyboardButton] = []
-    for name in slice_classes:
-        class_key = resolve_class_key(name)
+    # Создаем клавиатуру
+    keyboard = []
+    row = []
+    for i, class_name in enumerate(classes, 1):
+        emoji = class_emojis.get(class_name, "🎭")
+        button_text = f"{emoji} {class_name}"
+        
+        # Получаем ключ класса
+        class_key = resolve_class_key(class_name)
         if class_key:
-            # Используем короткий ID вместо полного ключа
+            # Используем короткий ID
             short_id = _register_class_key(class_key)
-            callback_data = f"class_{short_id}"
-            button_text = name[:20] + "..." if len(name) > 20 else name
-            class_row.append(InlineKeyboardButton(text=button_text, callback_data=callback_data))
-            if len(class_row) == 2:
-                keyboard.append(class_row)
-                class_row = []
-    if class_row:
-        keyboard.append(class_row)
+            callback_data = f"cls_{short_id}_m_1"  # Формат для перехода сразу в основную секцию
+        else:
+            callback_data = f"class_{class_name}"
+        
+        row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
+        
+        # Добавляем новую строку после каждого второго элемента
+        if i % 2 == 0:
+            keyboard.append(row)
+            row = []
     
-    # Навигация
-    prev_page = current_page - 1 if current_page > 1 else current_page
-    next_page = current_page + 1 if current_page < total_pages else current_page
-    
-    nav_row: list[InlineKeyboardButton] = []
-    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"class_page_{prev_page}"))
-    nav_row.append(InlineKeyboardButton(f"Стр {current_page}/{total_pages}", callback_data="class_page_info"))
-    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"class_page_{next_page}"))
-    keyboard.append(nav_row)
+    # Если остались недобавленные кнопки (нечетное количество классов)
+    if row:
+        keyboard.append(row)
     
     return text, InlineKeyboardMarkup(keyboard)
 
-
 def format_class_detail(class_key: str, section: str = "main", page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
     """Форматировать детальную информацию о классе с пагинацией"""
-    # Пробуем загрузить напрямую из файла по ключу
-    class_data = None
-    classes_dir = Path(__file__).parent.parent / "data_pars" / "classes"
-    
-    for json_file in classes_dir.glob("*.json"):
-        if json_file.name == "classes_list.json" or json_file.name == "Классы.json":
-            continue
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if class_key in data:
-                    class_data = data[class_key]
-                    break
-        except Exception:
-            continue
-    
-    # Если не нашли по ключу, пробуем по названию
+    # Загружаем данные класса через общие функции (принимаем либо ID, либо имя)
+    class_data = load_class_data(class_key)
+    # Если не нашли по ID, попробуем разрешить ключ по отображаемому имени
     if not class_data:
-        class_name = class_key.split("—")[0] if "—" in class_key else class_key
-        class_data = load_class_data(class_name)
+        resolved = resolve_class_key(class_key)
+        if resolved:
+            class_data = load_class_data(resolved)
     
     if not class_data:
         return "❌ Класс не найден", InlineKeyboardMarkup([])
@@ -587,108 +761,185 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
     
     # Основная страница
     if section == "main":
-        text_parts.append(f"⚔️ <b>{class_name}</b>\n")
-        
-        # Английское название
-        if class_data.get('name_en'):
-            text_parts.append(f"<i>{class_data['name_en']}</i>\n")
-        
-        # Описание класса
-        if "Описание класса" in class_data:
-            desc = class_data["Описание класса"]
-            if isinstance(desc, list):
-                desc_text = "\n".join([d for d in desc if d and d.strip()])
-                if desc_text:
-                    text_parts.append(f"<b>📖 Описание:</b>\n{desc_text}\n")
-            elif isinstance(desc, str) and desc.strip():
-                text_parts.append(f"<b>📖 Описание:</b>\n{desc}\n")
-        
-        # Ключевые характеристики
-        if "Ключевые характеристики" in class_data:
-            key_features = class_data["Ключевые характеристики"]
-            if isinstance(key_features, dict) and key_features:
-                text_parts.append("<b>📊 Ключевые характеристики:</b>")
-                for key, value in key_features.items():
-                    if value and str(value).strip() and str(value) != "-":
-                        text_parts.append(f"• <b>{key}:</b> {value}")
-                text_parts.append("")
-        
-        # Владение
-        if "Владение" in class_data:
-            prof = class_data["Владение"]
-            if isinstance(prof, list):
-                prof_items = [p for p in prof if p and str(p).strip() and str(p) != "-"]
-                if prof_items:
-                    text_parts.append("<b>🛡️ Владение:</b>")
-                    for item in prof_items:
-                        if ":" in item:
-                            parts = item.split(":", 1)
-                            if len(parts) == 2:
-                                text_parts.append(f"• <b>{parts[0]}:</b> {parts[1]}")
+        # Если это структурированные данные (новый формат)
+        if isinstance(class_data, dict) and ("name" in class_data or "hit_dice" in class_data):
+            # Название
+            display_name = class_data.get('name') or class_name
+            text_parts.append(f"⚔️ <b>{display_name}</b>\n")
+            # Английское название
+            if class_data.get('name_en'):
+                text_parts.append(f"<i>{class_data['name_en']}</i>\n")
+
+            # Краткая сводка
+            if class_data.get('hit_dice'):
+                text_parts.append(f"<b>🎲 Хиты:</b> {class_data['hit_dice']}")
+            if class_data.get('primary_abilities'):
+                pa = [ABILITY_NAMES.get(x, x.upper()) for x in class_data.get('primary_abilities')]
+                text_parts.append(f"<b>⚡ Главные характеристики:</b> {', '.join(pa)}")
+            if class_data.get('saving_throws'):
+                st = [ABILITY_NAMES.get(x, x.upper()) for x in class_data.get('saving_throws')]
+                text_parts.append(f"<b>🛡️ Спасброски:</b> {', '.join(st)}")
+            if class_data.get('armor_proficiencies'):
+                ap = [ARMOR_NAMES.get(x, x) for x in class_data.get('armor_proficiencies')]
+                text_parts.append(f"<b>🛡️ Владения броней:</b> {', '.join(ap)}")
+            if class_data.get('weapon_proficiencies'):
+                wp = [WEAPON_NAMES.get(x, x) for x in class_data.get('weapon_proficiencies')]
+                text_parts.append(f"<b>⚔️ Владения оружием:</b> {', '.join(wp)}")
+            if class_data.get('skill_choices'):
+                sc = class_data.get('skill_choices')
+                if isinstance(sc, dict):
+                    from_sk = [SKILL_NAMES.get(x, x.replace('_',' ').title()) for x in sc.get('from', [])]
+                    from_text = ', '.join(from_sk)
+                    text_parts.append(f"<b>🎯 Выбор навыков:</b> {sc.get('count', '?')} из {from_text}")
+
+            # Небольшой предпросмотр способностей (чтобы сразу видеть содержимое)
+            if class_data.get('features'):
+                feats = class_data.get('features', {})
+                preview = []
+                for lvl in sorted(feats.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+                    for feat in feats[lvl]:
+                        name = feat.get('name') or feat.get('name_en') or feat.get('id')
+                        desc = feat.get('description') or feat.get('Описание') or ''
+                        snippet = ''
+                        if isinstance(desc, str) and desc.strip():
+                            snippet = desc.split('.')[0].strip()
+                            if len(snippet) > 200:
+                                snippet = snippet[:197] + '...'
+                        preview.append(f"• Ур. {lvl}: {name}" + (f" — {snippet}" if snippet else ""))
+                        if len(preview) >= 5:
+                            break
+                    if len(preview) >= 5:
+                        break
+
+                if preview:
+                    text_parts.append("<b>📚 Способности (кратко):</b>")
+                    text_parts.extend(preview)
+
+            # Кнопки для перехода к секциям
+            if class_data.get('features'):
+                keyboard.append([InlineKeyboardButton("📚 Способности", callback_data=f"cls_{short_id}_a_1")])
+            # Архетипы (ищем через функцию из character_data)
+            try:
+                from src.character_data import get_archetypes_for_class
+                arch = get_archetypes_for_class(class_key)
+                if arch:
+                    keyboard.append([InlineKeyboardButton("🎭 Архетипы", callback_data=f"cls_{short_id}_r_1")])
+            except Exception:
+                pass
+
+        else:
+            # Старый формат (оставляем прежнюю логику)
+            text_parts.append(f"⚔️ <b>{class_name}</b>\n")
+            # Английское название
+            if class_data.get('name_en'):
+                text_parts.append(f"<i>{class_data['name_en']}</i>\n")
+            # Описание класса
+            if "Описание класса" in class_data:
+                desc = class_data["Описание класса"]
+                if isinstance(desc, list):
+                    desc_text = "\n".join([d for d in desc if d and d.strip()])
+                    if desc_text:
+                        text_parts.append(f"<b>📖 Описание:</b>\n{desc_text}\n")
+                elif isinstance(desc, str) and desc.strip():
+                    text_parts.append(f"<b>📖 Описание:</b>\n{desc}\n")
+
+            # Ключевые характеристики
+            if "Ключевые характеристики" in class_data:
+                key_features = class_data["Ключевые характеристики"]
+                if isinstance(key_features, dict) and key_features:
+                    text_parts.append("<b>📊 Ключевые характеристики:</b>")
+                    for key, value in key_features.items():
+                        if value and str(value).strip() and str(value) != "-":
+                            text_parts.append(f"• <b>{key}:</b> {value}")
+                    text_parts.append("")
+
+            # Владение
+            if "Владение" in class_data:
+                prof = class_data["Владение"]
+                if isinstance(prof, list):
+                    prof_items = [p for p in prof if p and str(p).strip() and str(p) != "-"]
+                    if prof_items:
+                        text_parts.append("<b>🛡️ Владение:</b>")
+                        for item in prof_items:
+                            if ":" in item:
+                                parts = item.split(":", 1)
+                                if len(parts) == 2:
+                                    text_parts.append(f"• <b>{parts[0]}:</b> {parts[1]}")
+                                else:
+                                    text_parts.append(f"• {item}")
                             else:
                                 text_parts.append(f"• {item}")
-                        else:
-                            text_parts.append(f"• {item}")
-                    text_parts.append("")
-            elif isinstance(prof, str) and prof.strip():
-                text_parts.append(f"<b>🛡️ Владение:</b>\n{prof}\n")
-        
-        # Кнопки для перехода к секциям
-        if "Классовые умения" in class_data:
-            keyboard.append([InlineKeyboardButton("📚 Классовые умения", callback_data=f"cls_{short_id}_a_1")])
-        if "Архетипы" in class_data:
-            keyboard.append([InlineKeyboardButton("🎭 Архетипы", callback_data=f"cls_{short_id}_r_1")])
-        if "БЫСТРОЕ СОЗДАНИЕ" in class_data:
-            keyboard.append([InlineKeyboardButton("⚡ Быстрое создание", callback_data=f"cls_{short_id}_q_1")])
+                        text_parts.append("")
+
+            # Кнопки для перехода к секциям (старый формат)
+            if "Классовые умения" in class_data:
+                keyboard.append([InlineKeyboardButton("📚 Классовые умения", callback_data=f"cls_{short_id}_a_1")])
+            if "Архетипы" in class_data:
+                keyboard.append([InlineKeyboardButton("🎭 Архетипы", callback_data=f"cls_{short_id}_r_1")])
+            if "БЫСТРОЕ СОЗДАНИЕ" in class_data:
+                keyboard.append([InlineKeyboardButton("⚡ Быстрое создание", callback_data=f"cls_{short_id}_q_1")])
     
     # Секция "Классовые умения"
     elif section == "abilities":
-        text_parts.append(f"⚔️ <b>{class_name}</b> - Классовые умения\n")
-        abilities = class_data.get("Классовые умения", [])
-        
-        if isinstance(abilities, list):
-            items = [a for a in abilities if a and str(a).strip() and str(a) != "-"]
+        text_parts.append(f"⚔️ <b>{class_name}</b> - Способности\n")
+        # Поддержка структурированного формата (features)
+        if isinstance(class_data, dict) and class_data.get('features'):
+            feats = class_data.get('features', {})
+            # Собираем список способностей (уровень - название)
+            items = []
+            for lvl in sorted(feats.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+                for feat in feats[lvl]:
+                    name = feat.get('name') or feat.get('name_en') or feat.get('id')
+                    if name:
+                        items.append(f"Ур. {lvl}: {name}")
+
             page_size = 10
             total_pages = max(1, (len(items) + page_size - 1) // page_size)
             current_page = min(max(1, page), total_pages)
-            
+
             start = (current_page - 1) * page_size
             end = start + page_size
             page_items = items[start:end]
-            
+
             for item in page_items:
                 text_parts.append(f"• {item}")
-            
+
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
-            
-            # Навигация
+
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
-        
-        elif isinstance(abilities, str):
-            # Разбиваем длинный текст на части
-            parts = split_message(abilities, limit=3500)
-            total_pages = len(parts)
-            current_page = min(max(1, page), total_pages)
-            
-            text_parts.append(parts[current_page - 1])
-            text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
-            
-            # Навигация
-            nav_row = []
-            if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
-            if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
-            if nav_row:
-                keyboard.append(nav_row)
+
+        else:
+            # Старый формат
+            abilities = class_data.get("Классовые умения", [])
+            if isinstance(abilities, list):
+                items = [a for a in abilities if a and str(a).strip() and str(a) != "-"]
+                page_size = 10
+                total_pages = max(1, (len(items) + page_size - 1) // page_size)
+                current_page = min(max(1, page), total_pages)
+                
+                start = (current_page - 1) * page_size
+                end = start + page_size
+                page_items = items[start:end]
+                
+                for item in page_items:
+                    text_parts.append(f"• {item}")
+                
+                text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
+                
+                # Навигация (без кнопки с номером страницы)
+                nav_row = []
+                if current_page > 1:
+                    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_a_{current_page - 1}"))
+                if current_page < total_pages:
+                    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_a_{current_page + 1}"))
+                if nav_row:
+                    keyboard.append(nav_row)
     
     # Секция "Быстрое создание"
     elif section == "quick_start":
@@ -700,44 +951,81 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
     # Секция "Архетипы"
     elif section == "archetypes":
         text_parts.append(f"⚔️ <b>{class_name}</b> - Архетипы\n")
-        archetypes = class_data.get("Архетипы", {})
-        
-        if isinstance(archetypes, dict):
-            archetype_list = [(name, data) for name, data in archetypes.items() 
-                            if name and not name.startswith("Воинские") and name != "ВОИНСКИЙ"]
-            
+        # Сначала пробуем структурированный формат
+        try:
+            from src.character_data import get_archetypes_for_class
+            archs = get_archetypes_for_class(class_key)
+        except Exception:
+            archs = {}
+
+        if archs:
+            archetype_list = [(name, data) for name, data in archs.items()]
             page_size = 2  # По 2 архетипа на страницу
             total_pages = max(1, (len(archetype_list) + page_size - 1) // page_size)
             current_page = min(max(1, page), total_pages)
-            
+
             start = (current_page - 1) * page_size
             end = start + page_size
             page_archetypes = archetype_list[start:end]
-            
+
             for arch_name, arch_data in page_archetypes:
-                text_parts.append(f"<b>🎭 {arch_name}</b>\n")
                 if isinstance(arch_data, dict):
-                    if "Описание" in arch_data:
-                        desc = arch_data["Описание"]
-                        if isinstance(desc, list):
-                            desc_text = "\n".join([d for d in desc if d and d.strip()][:3])
-                            if desc_text:
-                                text_parts.append(f"{desc_text}\n")
-                        elif isinstance(desc, str):
-                            text_parts.append(f"{desc[:500]}...\n" if len(desc) > 500 else f"{desc}\n")
-                text_parts.append("")
-            
+                    # пытаемся получить описание из разных полей
+                    desc = arch_data.get('Описание') or arch_data.get('description') or arch_data.get('Описание архетипа') or ''
+                    if isinstance(desc, list):
+                        desc_text = "\n".join([d for d in desc if d and d.strip()][:3])
+                        if desc_text:
+                            text_parts.append(f"<b>{arch_name}</b>\n{desc_text}\n")
+                    elif isinstance(desc, str) and desc.strip():
+                        text_parts.append(f"<b>{arch_name}</b>\n{desc[:500]}...\n" if len(desc) > 500 else f"<b>{arch_name}</b>\n{desc}\n")
+
             text_parts.append(f"<i>Страница {current_page}/{total_pages}</i>")
-            
-            # Навигация
+
+            # Навигация (без кнопки с номером страницы)
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_r_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_r_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_r_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_r_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
+
+        else:
+            # Старый формат
+            archetypes = class_data.get("Архетипы", {})
+            if isinstance(archetypes, dict):
+                archetype_list = [(name, data) for name, data in archetypes.items() 
+                                if name and not name.startswith("Воинские") and name != "ВОИНСКИЙ"]
+                
+                page_size = 2  # По 2 архетипа на страницу
+                total_pages = max(1, (len(archetype_list) + page_size - 1) // page_size)
+                current_page = min(max(1, page), total_pages)
+                
+                start = (current_page - 1) * page_size
+                end = start + page_size
+                page_archetypes = archetype_list[start:end]
+                
+                for arch_name, arch_data in page_archetypes:
+                    if isinstance(arch_data, dict):
+                        if "Описание" in arch_data:
+                            desc = arch_data["Описание"]
+                            if isinstance(desc, list):
+                                desc_text = "\n".join([d for d in desc if d and d.strip()][:3])
+                                if desc_text:
+                                    text_parts.append(f"{desc_text}\n")
+                            elif isinstance(desc, str):
+                                text_parts.append(f"{desc[:500]}...\n" if len(desc) > 500 else f"{desc}\n")
+                
+                text_parts.append(f"<i>Страница {current_page}/{total_pages}</i>")
+                
+                # Навигация (без кнопки с номером страницы)
+                nav_row = []
+                if current_page > 1:
+                    nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_r_{current_page - 1}"))
+                if current_page < total_pages:
+                    nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_r_{current_page + 1}"))
+                if nav_row:
+                    keyboard.append(nav_row)
     
     # Дополнительные секции
     elif section in class_data:
@@ -759,14 +1047,13 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация - используем короткое имя секции (первые 3 символа)
+            # Навигация - используем короткое имя секции (без кнопки с номером страницы)
             section_short = section[:3].lower() if len(section) >= 3 else section.lower()
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
         
@@ -778,35 +1065,241 @@ def format_class_detail(class_key: str, section: str = "main", page: int = 1) ->
             text_parts.append(parts[current_page - 1])
             text_parts.append(f"\n<i>Страница {current_page}/{total_pages}</i>")
             
-            # Навигация - используем короткое имя секции (первые 3 символа)
+            # Навигация - используем короткое имя секции (без кнопки с номером страницы)
             section_short = section[:3].lower() if len(section) >= 3 else section.lower()
             nav_row = []
             if current_page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
-            nav_row.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="cls_info"))
+                nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"cls_{short_id}_{section_short}_{current_page - 1}"))
             if current_page < total_pages:
-                nav_row.append(InlineKeyboardButton("➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
+                nav_row.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"cls_{short_id}_{section_short}_{current_page + 1}"))
             if nav_row:
                 keyboard.append(nav_row)
     
-    # Кнопка возврата
-    keyboard.append([InlineKeyboardButton("◀ Назад к классу", callback_data=f"cls_{short_id}_m_1")])
+    # Кнопки навигации в зависимости от секции
+    if section != "main":
+        # В дополнительных секциях добавляем кнопку "Назад к классу"
+        keyboard.append([InlineKeyboardButton("◀️ Назад к классу", callback_data=f"cls_{short_id}_m_1")])
+    
+    # Кнопка возврата к списку классов (добавляется всегда)
     keyboard.append([InlineKeyboardButton("🔙 К списку классов", callback_data="class_page_1")])
     
     return "\n".join(text_parts), InlineKeyboardMarkup(keyboard)
 
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /start с меню кнопок"""
+    if update.message:
+        # Создаем клавиатуру
+        keyboard = [
+            [KeyboardButton("👤 Создать персонажа"), KeyboardButton("🎲 Броски костей")],
+            [KeyboardButton("⚔️ Боевая система"), KeyboardButton("📊 Характеристики")],
+            [KeyboardButton("📚 Глоссарий"), KeyboardButton("❓ Помощь")],
+            [KeyboardButton("👀 Классы"), KeyboardButton("👥 Расы")],
+            [KeyboardButton("🔮 Заклинания")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            START_TEXT,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+
+async def handle_reply_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик нажатий на кнопки Reply-клавиатуры"""
+    if not update.message or not update.message.text:
+        return
+    
+    text = update.message.text
+    
+    if text == "👤 Создать персонажа":
+        await cmd_createcharacter(update, context)
+        
+    elif text == "🎲 Броски костей":
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        parts = [DICE_RULES_TEXT_PART1, DICE_RULES_TEXT_PART2, DICE_RULES_TEXT_PART3, DICE_RULES_TEXT_PART4, DICE_RULES_TEXT_PART5]
+        session.set_section("dice", "".join(parts))
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="dice_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        total = compute_total_parts(parts)
+        await update.message.reply_text(
+            f"🎲 <b>Броски костей (1/{total}):</b>\n\n{DICE_RULES_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "⚔️ Боевая система":
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        parts = [COMBAT_RULES_TEXT_PART1, COMBAT_RULES_TEXT_PART2, COMBAT_RULES_TEXT_PART3, COMBAT_RULES_TEXT_PART4, COMBAT_RULES_TEXT_PART5, COMBAT_RULES_TEXT_PART6, COMBAT_RULES_TEXT_PART7]
+        session.set_section("combat", "".join(parts))
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="combat_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        total = compute_total_parts(parts)
+        await update.message.reply_text(
+            f"⚔️ <b>Боевая система (1/{total}):</b>\n\n{COMBAT_RULES_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "📊 Характеристики":
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        parts = [STATS_TEXT_PART1, STATS_TEXT_PART2, STATS_TEXT_PART3, STATS_TEXT_PART4, STATS_TEXT_PART5, STATS_TEXT_PART6, STATS_TEXT_PART7, STATS_TEXT_PART8, STATS_TEXT_PART9, STATS_TEXT_PART10]
+        session.set_section("stats", "".join(parts))
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="stats_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        total = compute_total_parts(parts)
+        await update.message.reply_text(
+            f"📊 <b>Характеристики (1/{total}):</b>\n\n{STATS_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "📚 Глоссарий":
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        parts = [GLOSSARY_TEXT_PART1, GLOSSARY_TEXT_PART2, GLOSSARY_TEXT_PART3, GLOSSARY_TEXT_PART4, GLOSSARY_TEXT_PART5]
+        session.set_section("glossary", "".join(parts))
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="glossary_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        total = compute_total_parts(parts)
+        await update.message.reply_text(
+            f"📚 <b>Глоссарий (1/{total}):</b>\n\n{GLOSSARY_TEXT_PART1}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+    elif text == "❓ Помощь":
+        await cmd_help(update, context)
+    
+    elif text == "👀 Классы":
+        # Вызываем функцию для отображения классов
+        await cmd_classes(update, context)
+        
+    elif text == "👥 Расы":
+        # Вызываем функцию для отображения рас
+        await cmd_races(update, context)
+        
+    elif text == "🔮 Заклинания":
+        # Вызываем функцию для отображения заклинаний
+        await cmd_spells(update, context)
+
+async def handle_inline_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик inline-кнопок для всех разделов"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Вспомогательные функции для создания кнопок
+    def create_nav_buttons(current: int, total: int, prefix: str):
+        """Создает кнопки навигации"""
+        buttons = []
+        if current > 0:
+            buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"{prefix}_{current-1}"))
+        if current < total - 1:
+            buttons.append(InlineKeyboardButton("Далее ➡️", callback_data=f"{prefix}_{current+1}"))
+        return [buttons] if buttons else []
+
+    def compute_total_parts(parts: list[str]) -> int:
+        """Return number of visible pages based on last non-empty part."""
+        for i in range(len(parts) - 1, -1, -1):
+            p = parts[i]
+            if p and str(p).strip():
+                return i + 1
+        return len(parts)
+    
+    # Обработка для Основных правил
+    if query.data.startswith("rules_"):
+        part_num = int(query.data.split("_")[1])
+        parts = [RULES_TEXT_PART1, RULES_TEXT_PART2, RULES_TEXT_PART3]
+        total_parts = compute_total_parts(parts)
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "rules"))
+        await query.edit_message_text(
+            f"📚 <b>Основные правила ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Бросков костей 
+    elif query.data.startswith("dice_"):
+        part_num = int(query.data.split("_")[1])
+        parts = [DICE_RULES_TEXT_PART1, DICE_RULES_TEXT_PART2, DICE_RULES_TEXT_PART3,
+            DICE_RULES_TEXT_PART4, DICE_RULES_TEXT_PART5]
+        total_parts = compute_total_parts(parts)
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "dice"))
+        await query.edit_message_text(
+            f"🎲 <b>Броски костей ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Боевой системы 
+    elif query.data.startswith("combat_"):
+        part_num = int(query.data.split("_")[1])
+        parts = [COMBAT_RULES_TEXT_PART1, COMBAT_RULES_TEXT_PART2, COMBAT_RULES_TEXT_PART3,
+            COMBAT_RULES_TEXT_PART4, COMBAT_RULES_TEXT_PART5, COMBAT_RULES_TEXT_PART6,
+            COMBAT_RULES_TEXT_PART7]
+        total_parts = compute_total_parts(parts)
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "combat"))
+        await query.edit_message_text(
+            f"⚔️ <b>Боевая система ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Характеристик
+    elif query.data.startswith("stats_"):
+        part_num = int(query.data.split("_")[1])
+        parts = [STATS_TEXT_PART1, STATS_TEXT_PART2, STATS_TEXT_PART3, STATS_TEXT_PART4,
+            STATS_TEXT_PART5, STATS_TEXT_PART6, STATS_TEXT_PART7, STATS_TEXT_PART8,
+            STATS_TEXT_PART9, STATS_TEXT_PART10]
+        total_parts = compute_total_parts(parts)
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "stats"))
+        await query.edit_message_text(
+            f"📊 <b>Характеристики ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+    
+    # Обработка для Глоссария 
+    elif query.data.startswith("glossary_"):
+        part_num = int(query.data.split("_")[1])
+        parts = [GLOSSARY_TEXT_PART1, GLOSSARY_TEXT_PART2, GLOSSARY_TEXT_PART3,
+            GLOSSARY_TEXT_PART4, GLOSSARY_TEXT_PART5]
+        total_parts = compute_total_parts(parts)
+        
+        reply_markup = InlineKeyboardMarkup(create_nav_buttons(part_num, total_parts, "glossary"))
+        await query.edit_message_text(
+            f"📚 <b>Глоссарий ({part_num+1}/{total_parts}):</b>\n\n{parts[part_num]}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+
 def load_env() -> None:
-	load_dotenv()
+    load_dotenv()
 
 
 def get_bot_token() -> str:
-	load_env()
-	bot_token: Final[str | None] = os.getenv("TELEGRAM_BOT_TOKEN")
-	if not bot_token:
-		raise RuntimeError(
-			"TELEGRAM_BOT_TOKEN is not set. Create a .env file or set the environment variable."
-		)
-	return bot_token
+    load_env()
+    bot_token: Final[str | None] = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN is not set. Create a .env file or set the environment variable."
+        )
+    return bot_token
+
+
+def compute_total_parts(parts: list[str]) -> int:
+    """Return number of visible pages based on last non-empty part."""
+    for i in range(len(parts) - 1, -1, -1):
+        p = parts[i]
+        if p and str(p).strip():
+            return i + 1
+    return len(parts)
 
 user_sessions: Dict[int, Dict[str, str]] = {}
 
@@ -815,7 +1308,7 @@ class UserSession:
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.current_section = "rules"  # по умолчанию раздел "Основные правила"
-        self.section_content = RULES_TEXT
+        self.section_content = RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3
     
     @staticmethod
     def get_or_create(user_id: int) -> "UserSession":
@@ -823,9 +1316,9 @@ class UserSession:
         if user_id not in user_sessions:
             user_sessions[user_id] = {
                 "section": "rules",
-                "content": RULES_TEXT
+                "content": RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3
             }
-        return user_sessions.get(user_id)
+        return UserSession(user_id)
     
     def set_section(self, section: str, content: str) -> None:
         """Установить текущий раздел"""
@@ -838,158 +1331,185 @@ class UserSession:
         """Получить название и содержимое текущего раздела"""
         session = user_sessions.get(self.user_id, {
             "section": "rules",
-            "content": RULES_TEXT
+            "content": RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3
         })
-        return session.get("section", "rules"), session.get("content", RULES_TEXT)
+        return session.get("section", "rules"), session.get("content", RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	"""Обработчик обычных текстовых сообщений через Ollama"""
-	if not update.message or not update.message.text:
-		return
+    """Обработчик всех текстовых сообщений"""
+    if not update.message or not update.message.text:
+        return
 
-	user_id = update.effective_user.id
-	
-	# Проверяем, находится ли пользователь в процессе создания персонажа
-	session = cc.get_character_session(user_id)
-	if session and session.step == cc.CreationStep.NAME:
-		# Обрабатываем ввод имени персонажа
-		text, markup = cc.handle_name_input(user_id, update.message.text)
-		if markup:
-			await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-		else:
-			await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-		return
-	
-	# Получаем текущий раздел пользователя
-	user_message = update.message.text
+    user_id = update.effective_user.id
+    user_message = update.message.text.strip()
+    
+    # Сначала проверяем Reply-клавиатуру
+    if user_message in [
+        "👤 Создать персонажа", "🎲 Броски костей", "⚔️ Боевая система", "📊 Характеристики",
+        "📚 Глоссарий", "❓ Помощь", "👀 Классы", "👥 Расы", "🔮 Заклинания"
+    ]:
+        # Обрабатываем кнопки Reply-клавиатуры
+        await handle_reply_keyboard(update, context)
+        return
+    
+    # Проверяем, находится ли пользователь в процессе создания персонажа
+    session = cc.get_character_session(user_id)
+    
+    if session:
+        # Если пользователь в процессе создания персонажа
+        if session.step == cc.CreationStep.NAME:
+            # Обрабатываем ввод имени персонажа
+            text, markup = cc.handle_name_input(user_id, user_message)
+            
+            if markup:
+                await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            else:
+                # Если markup=None, значит нужно продолжать ввод имени
+                await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+            return
+        else:
+            # Игнорируем сообщения во время других этапов создания персонажа
+            await update.message.reply_text(
+                "ℹ️ Сейчас ты в процессе создания персонажа. "
+                "Пожалуйста, используй кнопки для навигации или заверши создание персонажа.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+    
+    # Если это не создание персонажа и не кнопка клавиатуры, обрабатываем как обычный запрос к Ollama
+    session_obj = UserSession(user_id)
+    section_name, section_content = session_obj.get_current_section()
 
-	section_name, section_content = UserSession(user_id).get_current_section()
+    # Определяем использовать ли RAG
+    use_rag = section_name in ["races", "spells", "classes"]
+    rag_section_type = section_name if use_rag else ""
 
-	# Определяем использовать ли RAG
-	use_rag = section_name in ["races", "spells", "classes"]
-	rag_section_type = section_name if use_rag else ""
+    await update.message.chat.send_action("typing")
 
-	await update.message.chat.send_action("typing")
+    response = ollama_client.generate_response(
+        user_message=user_message,
+        section_name=section_name,
+        section_content=section_content,
+        use_rag=use_rag,
+        rag_section_type=rag_section_type
+    )
 
-	response = ollama_client.generate_response(
-		user_message=user_message,
-		section_name=section_name,
-		section_content=section_content,
-		use_rag=use_rag,
-		rag_section_type=rag_section_type
-	)
-
-	if response:
-		try:
-			await update.message.reply_text(response, parse_mode=ParseMode.HTML)
-		except Exception as e:
-			print(f"❌ Ошибка при отправке сообщения: {e}")
-			# Пробуем отправить без форматирования или укороченное сообщение
-			try:
-				short_response = response[:4000] if len(response) > 4000 else response
-				await update.message.reply_text(short_response)
-			except Exception as e2:
-				await update.message.reply_text(
-					"❌ Произошла ошибка при отправке ответа. Попробуйте позже."
-				)
-	else:
-		await update.message.reply_text(
-			"❌ Не удалось получить ответ. Проверь подключение к Ollama."
-		)
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(START_TEXT)
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
-
-
-async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("rules", RULES_TEXT)
-		await update.message.reply_text(RULES_TEXT, parse_mode=ParseMode.HTML)
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(START_TEXT)
-
+    if response:
+        try:
+            await update.message.reply_text(response, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            print(f"❌ Ошибка при отправке сообщения: {e}")
+            try:
+                short_response = response[:4000] if len(response) > 4000 else response
+                await update.message.reply_text(short_response)
+            except Exception as e2:
+                await update.message.reply_text(
+                    "❌ Произошла ошибка при отправке ответа. Попробуйте позже."
+                )
+    else:
+        await update.message.reply_text(
+            "❌ Не удалось получить ответ. Проверь подключение к Ollama."
+        )
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message:
-		await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
-
+    if update.message:
+        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
 
 async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("rules", RULES_TEXT)
-		await update.message.reply_text(RULES_TEXT, parse_mode=ParseMode.HTML)
-
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("rules", RULES_TEXT_PART1 + RULES_TEXT_PART2 + RULES_TEXT_PART3)
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="rules_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            RULES_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_dice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("dice", DICE_RULES_TEXT)
-		await update.message.reply_text(DICE_RULES_TEXT, parse_mode=ParseMode.HTML)
-
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("dice", DICE_RULES_TEXT_PART1 + DICE_RULES_TEXT_PART2 + DICE_RULES_TEXT_PART3 + DICE_RULES_TEXT_PART4 + DICE_RULES_TEXT_PART5)
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="dice_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            DICE_RULES_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_combat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("combat", COMBAT_RULES_TEXT_PART1 + COMBAT_RULES_TEXT_PART2 + COMBAT_RULES_TEXT_PART3 + COMBAT_RULES_TEXT_PART4)
-		# Split large text into multiple messages
-		combat_parts = [
-			COMBAT_RULES_TEXT_PART1,
-			COMBAT_RULES_TEXT_PART2,
-			COMBAT_RULES_TEXT_PART3,
-			COMBAT_RULES_TEXT_PART4
-		]
-		
-		for part in combat_parts:
-			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("combat", 
+            COMBAT_RULES_TEXT_PART1 + COMBAT_RULES_TEXT_PART2 + 
+            COMBAT_RULES_TEXT_PART3 + COMBAT_RULES_TEXT_PART4 +
+            COMBAT_RULES_TEXT_PART5 + COMBAT_RULES_TEXT_PART6 +
+            COMBAT_RULES_TEXT_PART7
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="combat_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            COMBAT_RULES_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("stats", STATS_TEXT_PART1 + STATS_TEXT_PART2)
-		# Split large text into multiple messages
-		combat_parts = [
-			STATS_TEXT_PART1,
-			STATS_TEXT_PART2,
-		]
-		
-		for part in combat_parts:
-			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("stats", 
+            STATS_TEXT_PART1 + STATS_TEXT_PART2 + STATS_TEXT_PART3 +
+            STATS_TEXT_PART4 + STATS_TEXT_PART5 + STATS_TEXT_PART6 +
+            STATS_TEXT_PART7 + STATS_TEXT_PART8 + STATS_TEXT_PART9 +
+            STATS_TEXT_PART10
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="stats_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            STATS_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
 
 async def cmd_glossary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-	if update.message and update.effective_user:
-		user_id = update.effective_user.id
-		# Сохраняем текущий раздел пользователя
-		session = UserSession(user_id)
-		session.set_section("glossary", GLOSSARY_TEXT_PART1 + GLOSSARY_TEXT_PART2)
-		# Split large text into multiple messages
-		glossary_parts = [
-			GLOSSARY_TEXT_PART1,
-			GLOSSARY_TEXT_PART2,
-		]
-		
-		for part in glossary_parts:
-			await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+    if update.message and update.effective_user:
+        user_id = update.effective_user.id
+        session = UserSession(user_id)
+        session.set_section("glossary", 
+            GLOSSARY_TEXT_PART1 + GLOSSARY_TEXT_PART2 + GLOSSARY_TEXT_PART3 +
+            GLOSSARY_TEXT_PART4 + GLOSSARY_TEXT_PART5
+        )
+        keyboard = [[InlineKeyboardButton("Далее ➡️", callback_data="glossary_1")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            GLOSSARY_TEXT_PART1,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+
+async def cmd_classes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /classes - красивый список классов с инлайн-кнопками"""
+    if not update.message:
+        return
+    
+    user_id = update.effective_user.id
+    session = UserSession(user_id)
+    session.set_section("classes", "")
+
+    # Убраны параметры page и page_size
+    text, markup = build_classes_simple_page()
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 async def cmd_races(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Команда /races - список рас с кликабельными названиями"""
@@ -1001,8 +1521,7 @@ async def cmd_races(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session.set_section("races", "")
 
     text, markup = build_races_page(page=1)
-    await update.message.reply_text(text, parse_mode=None, reply_markup=markup)
-
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 async def cmd_spells(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Команда /spells - выбор уровня заклинаний"""
@@ -1014,19 +1533,6 @@ async def cmd_spells(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     session.set_section("spells", "")
     
     text, markup = build_spells_level_selection()
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-
-
-async def cmd_classes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /classes - список классов"""
-    if not update.message or not update.effective_user:
-        return
-    
-    user_id = update.effective_user.id
-    session = UserSession(user_id)
-    session.set_section("classes", "")
-    
-    text, markup = build_classes_page(page=1)
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
@@ -1075,7 +1581,7 @@ def build_levelup_confirm_message(session) -> tuple[str, InlineKeyboardMarkup]:
 
 def build_archetype_list_message(session) -> tuple[str, InlineKeyboardMarkup]:
     """Построить список архетипов для выбора"""
-    from .character_data import get_archetypes_for_class
+    from src.character_data import get_archetypes_for_class
     
     character = session.character
     char_id = character.id
@@ -1086,15 +1592,16 @@ def build_archetype_list_message(session) -> tuple[str, InlineKeyboardMarkup]:
     text += "Нажмите на архетип, чтобы узнать подробности:\n\n"
     
     keyboard = []
-    for idx, (arch_name, arch_data) in enumerate(archetypes.items()):
+    for idx, (arch_key, arch_data) in enumerate(archetypes.items()):
+        display_name = arch_data.get("name") or arch_key
         desc = arch_data.get("description", "")
         # Показываем первые 80 символов описания
         short_desc = desc[:80] + "..." if len(desc) > 80 else desc
-        text += f"<b>• {arch_name}</b>\n<i>{short_desc}</i>\n\n"
-        
+        text += f"<b>• {display_name}</b>\n<i>{short_desc}</i>\n\n"
+
         # Кнопка для просмотра деталей
         keyboard.append([InlineKeyboardButton(
-            f"📖 {arch_name}",
+            f"📖 {display_name}",
             callback_data=f"char_lu_arv_{char_id}_{idx}"
         )])
     
@@ -1105,7 +1612,7 @@ def build_archetype_list_message(session) -> tuple[str, InlineKeyboardMarkup]:
 
 def build_archetype_detail_message(session, arch_idx: int) -> tuple[str, InlineKeyboardMarkup]:
     """Построить детальное описание архетипа"""
-    from .character_data import get_archetypes_for_class
+    from src.character_data import get_archetypes_for_class
     
     character = session.character
     char_id = character.id
@@ -1129,31 +1636,43 @@ def build_archetype_detail_message(session, arch_idx: int) -> tuple[str, InlineK
     else:
         text += f"{description}\n\n"
     
-    # Способности которые получит персонаж на текущем уровне
-    skills = arch_data.get("skills", {})
-    level_skills = skills.get(str(new_level), [])
-    
-    if level_skills:
+    # Способности / features которые получит персонаж на текущем уровне
+    features = arch_data.get("features", {})
+    level_feats = features.get(str(new_level), [])
+
+    if level_feats:
         text += f"<b>⚡ Способности {new_level} уровня:</b>\n"
-        for skill in level_skills:
-            # Показываем первые 200 символов каждой способности
-            if len(skill) > 200:
-                text += f"• {skill[:200]}...\n\n"
+        for feat in level_feats:
+            if isinstance(feat, dict):
+                name = feat.get("name") or feat.get("id") or "Способность"
+                desc = feat.get("description", "")
+                if len(desc) > 200:
+                    text += f"• <b>{name}</b>: {desc[:200]}...\n\n"
+                else:
+                    text += f"• <b>{name}</b>: {desc}\n\n"
             else:
-                text += f"• {skill}\n\n"
-    
-    # Заклинания архетипа на текущем уровне
-    spells = arch_data.get("spells", {})
-    level_spells = spells.get(str(new_level), [])
-    
-    if level_spells:
+                text += f"• {str(feat)[:200]}\n\n"
+
+    # Если гранты содержат заклинания — соберём их
+    spells_list = []
+    for feat in level_feats:
+        if isinstance(feat, dict):
+            grants = feat.get("grants", {}) or {}
+            if "spells" in grants:
+                sp = grants["spells"]
+                if isinstance(sp, list):
+                    spells_list.extend(sp)
+                else:
+                    spells_list.append(str(sp))
+
+    if spells_list:
         text += f"<b>✨ Особые заклинания {new_level} уровня:</b>\n"
-        for spell in level_spells:
+        for spell in spells_list:
             text += f"• {spell}\n"
         text += "\n"
     
     # Краткий обзор что будет на следующих уровнях
-    future_levels = [lvl for lvl in sorted(skills.keys(), key=lambda x: int(x)) if int(lvl) > new_level]
+    future_levels = [lvl for lvl in sorted(features.keys(), key=lambda x: int(x)) if int(lvl) > new_level]
     if future_levels:
         text += "<b>📈 На следующих уровнях:</b>\n"
         for lvl in future_levels[:3]:  # Показываем до 3 следующих уровней
@@ -1165,6 +1684,35 @@ def build_archetype_detail_message(session, arch_idx: int) -> tuple[str, InlineK
         [InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}")]
     ]
     
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_archetype_feature_choice_message(session, choice_idx: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    """Показать интерфейс выбора опции архетипной способности (например, выбор тотема)."""
+    char = session.character
+    char_id = char.id
+    choices = session.gains.archetype_feature_choices
+    if not choices or choice_idx >= len(choices):
+        return build_levelup_confirm_message(session)
+
+    choice = choices[choice_idx]
+    feature_name = choice.get("feature_name")
+    opts = choice.get("options", [])
+    count = choice.get("count", 1)
+
+    text = f"🎯 <b>Выбор для способности: {feature_name}</b>\n\n"
+    text += f"Выберите {count} вариант(а) из списка:\n\n"
+
+    keyboard = []
+    for idx, opt in enumerate(opts):
+        keyboard.append([InlineKeyboardButton(str(opt), callback_data=f"char_lu_choice_{char_id}_{choice_idx}_{idx}")])
+
+    # Кнопки навигации
+    nav = []
+    nav.append(InlineKeyboardButton("◀ Назад", callback_data=f"char_lu_arlist_{char_id}"))
+    nav.append(InlineKeyboardButton("❌ Отмена", callback_data=f"char_view_{char_id}"))
+    keyboard.append(nav)
+
     return text, InlineKeyboardMarkup(keyboard)
 
 
@@ -1281,68 +1829,80 @@ async def cmd_levelup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def race_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик клика на названию расы"""
+    """Обработчик клика на название расы"""
     query = update.callback_query
     await query.answer()
     
-    race_name = query.data.replace("race_", "")
+    data = query.data
     
-    load_races_data()
-    
-    if race_name not in RACES_DATA:
-        await query.edit_message_text("❌ Раса не найдена")
+    if not data.startswith("race_detail_"):
+        await query.edit_message_text("❌ Ошибка: неверный формат данных")
         return
     
-    # Формируем полную информацию о расе
-    race_content = RACES_DATA[race_name]
-    full_text = f"<b>🎭 {race_name}</b>\n\n"
+    race_key_part = data.replace("race_detail_", "")
     
-    for section_title, section_content in race_content.items():
-        if isinstance(section_content, list) and section_content:
-            full_text += f"<b>{section_title}:</b>\n"
-            for item in section_content:
-                full_text += f"{item}\n\n"
-        elif isinstance(section_content, str) and section_content:
-            full_text += f"<b>{section_title}:</b> {section_content}\n\n"
+    # Показываем первую страницу детальной информации
+    text, markup = build_race_detail_page(race_key_part, page=1)
     
-    # Разбиваем если больше 4096 символов
-    max_length = 4096
-    if len(full_text) > max_length:
-        parts = []
-        current_part = ""
-        
-        for paragraph in full_text.split("\n\n"):
-            if len(current_part) + len(paragraph) + 2 < max_length:
-                current_part += paragraph + "\n\n"
-            else:
-                if current_part:
-                    parts.append(current_part)
-                current_part = paragraph + "\n\n"
-        
-        if current_part:
-            parts.append(current_part)
-        
-        await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML)
-        
-        for part in parts[1:]:
-            await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+    # Проверяем длину текста и разбиваем при необходимости
+    if len(text) > 4096:
+        # Разбиваем текст на части
+        parts = split_message(text)
+        if parts:
+            # Отправляем первую часть с кнопками
+            await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
+            # Остальные части без кнопок
+            for part in parts[1:]:
+                await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text("❌ Ошибка: текст слишком длинный", parse_mode=ParseMode.HTML)
     else:
-        await query.edit_message_text(full_text, parse_mode=ParseMode.HTML)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def race_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Пагинация списка рас"""
+    """Пагинация списка рас и детальной информации"""
     query = update.callback_query
-    data = query.data.replace("race_page_", "")
-    try:
-        page = int(data)
-    except ValueError:
-        page = 1
-
-    text, markup = build_races_page(page=page)
     await query.answer()
-    await query.edit_message_text(text, reply_markup=markup, parse_mode=None)
+    
+    data = query.data
+    
+    if data.startswith("race_page_"):
+        try:
+            page = int(data.replace("race_page_", ""))
+        except ValueError:
+            page = 1
 
+        text, markup = build_races_page(page=page)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    elif data.startswith("race_detail_page_"):
+        # Пагинация внутри детальной информации о расе
+        parts = data.replace("race_detail_page_", "").split("_")
+        if len(parts) >= 2:
+            try:
+                page = int(parts[-1])
+                # Собираем ключ расы (может содержать подчеркивания)
+                race_key_parts = parts[:-1]
+                race_key = "_".join(race_key_parts)
+                
+                text, markup = build_race_detail_page(race_key, page=page)
+                
+                # Проверяем длину текста и разбиваем при необходимости
+                if len(text) > 4096:
+                    # Разбиваем текст на части
+                    message_parts = split_message(text)
+                    if message_parts:
+                        # Отправляем первую часть с кнопками
+                        await query.edit_message_text(message_parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
+                        # Остальные части без кнопок
+                        for part in message_parts[1:]:
+                            await query.message.reply_text(part, parse_mode=ParseMode.HTML)
+                    else:
+                        await query.edit_message_text("❌ Ошибка: текст слишком длинный", parse_mode=ParseMode.HTML)
+                else:
+                    await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+            except ValueError:
+                await query.edit_message_text("❌ Ошибка пагинации")
 
 # ========== ОБРАБОТЧИКИ ДЛЯ ЗАКЛИНАНИЙ ==========
 
@@ -1360,42 +1920,43 @@ async def spell_level_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    level = query.data.replace("spell_level_", "")
+    data = query.data
     
-    # Если это просто выбор уровня, показываем первую страницу списка
-    if level != "select":
-        text, markup = build_spells_page(level=level, page=1)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    else:
+    if data == "spell_level_select":
         # Возврат к выбору уровня
         text, markup = build_spells_level_selection()
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif data.startswith("spell_level_"):
+        # Выбор конкретного уровня
+        level = data.replace("spell_level_", "")
+        text, markup = build_spells_page(level=level, page=1)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def spell_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Пагинация списка заклинаний"""
     query = update.callback_query
-    data = query.data.replace("spell_page_", "")
-    
-    if data == "info":
-        await query.answer("Информация о текущей странице")
-        return
-    
-    # Формат: level_page или level_1, level_2, etc.
-    parts = data.split("_", 1)
-    if len(parts) != 2:
-        await query.answer("❌ Ошибка навигации")
-        return
-    
-    level = parts[0]
-    try:
-        page = int(parts[1])
-    except ValueError:
-        page = 1
-    
-    text, markup = build_spells_page(level=level, page=page)
     await query.answer()
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    
+    data = query.data
+    
+    # Формат: spell_page_{level}_{page}
+    if data.startswith("spell_page_"):
+        data_parts = data.replace("spell_page_", "")
+        parts = data_parts.split("_")
+        
+        if len(parts) < 2:
+            await query.answer("❌ Ошибка навигации")
+            return
+        
+        level = parts[0]
+        try:
+            page = int(parts[1])
+        except ValueError:
+            page = 1
+        
+        text, markup = build_spells_page(level=level, page=page)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1403,19 +1964,20 @@ async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     
-    # Формат: spell_level_index (например: spell_1_5)
-    data = query.data.replace("spell_", "")
-    parts = data.split("_", 1)
+    # Формат: spell_detail_{level}_{index}_{current_page}
+    data = query.data.replace("spell_detail_", "")
+    parts = data.split("_")
     
-    if len(parts) != 2:
-        await query.edit_message_text("❌ Ошибка: заклинание не найдено")
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Ошибка: неверный формат данных")
         return
     
     level = parts[0]
     try:
         spell_index = int(parts[1])
+        return_page = int(parts[2])  # Страница, с которой пришли
     except ValueError:
-        await query.edit_message_text("❌ Ошибка: неверный индекс заклинания")
+        await query.edit_message_text("❌ Ошибка: неверные параметры")
         return
     
     # Получаем список заклинаний и находим по индексу
@@ -1431,14 +1993,14 @@ async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Кнопки навигации
     keyboard: list[list[InlineKeyboardButton]] = []
-    keyboard.append([InlineKeyboardButton("◀ Назад к списку", callback_data=f"spell_page_{level}_1")])
+    keyboard.append([InlineKeyboardButton("◀️ Назад к списку", callback_data=f"spell_page_{level}_{return_page}")])
     keyboard.append([InlineKeyboardButton("🔙 К выбору уровня", callback_data="spell_level_select")])
     
     markup = InlineKeyboardMarkup(keyboard)
     
-    # Разбиваем если слишком длинное
-    if len(detail_text) > 4096:
-        parts = split_message(detail_text, limit=4096)
+    # Разбиваем если слишком длинное (Telegram ограничение - 4096 символов)
+    if len(detail_text) > 4000:
+        parts = split_message(detail_text, limit=4000)
         await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
         for part in parts[1:]:
             await query.message.reply_text(part, parse_mode=ParseMode.HTML)
@@ -1448,26 +2010,103 @@ async def spell_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ========== ОБРАБОТЧИКИ ДЛЯ КЛАССОВ ==========
 
-async def class_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Пагинация списка классов"""
+
+async def classes_simple_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик упрощенных колбэков для классов"""
     query = update.callback_query
-    data = query.data.replace("class_page_", "")
+    await query.answer()
     
-    if data == "info":
-        await query.answer("Информация о текущей странице")
+    data = query.data
+    
+    if data.startswith("class_simple_"):
+        # Показ деталей класса
+        short_id = data.replace("class_simple_", "")
+        class_key = _get_class_key_from_id(short_id)
+        
+        if class_key:
+            text, markup = format_class_detail(class_key, "main", 1)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            await query.edit_message_text("❌ Класс не найден")
+    
+    elif data.startswith("classes_page_"):
+        # Пагинация - теперь просто показываем список
+        text, markup = build_classes_simple_page()  # Без параметров
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    
+    elif data == "classes_info":
+        # Информация
+        await query.answer("Используйте кнопки для навигации")
+    
+    elif data == "classes_back_simple":
+        # Возврат к списку
+        text, markup = build_classes_simple_page()  # Без параметров
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def class_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик подробной информации о классе"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    # Формат: cls_{short_id}_{section}_{page}
+    if not data.startswith("cls_"):
+        await query.edit_message_text("❌ Ошибка: неверный формат запроса")
         return
     
+    parts = data.replace("cls_", "").split("_")
+    
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Ошибка: неполный запрос")
+        return
+    
+    short_id = parts[0]
+    section_code = parts[1]
     try:
-        page = int(data)
+        page = int(parts[2])
     except ValueError:
         page = 1
     
-    text, markup = build_classes_page(page=page)
-    await query.answer()
+    # Расшифровываем код секции
+    section_map = {
+        "m": "main",
+        "a": "abilities", 
+        "r": "archetypes",
+        "q": "quick_start"
+    }
+    section = section_map.get(section_code, "main")
+    
+    # Получаем полный ключ класса
+    class_key = _get_class_key_from_id(short_id)
+    if not class_key:
+        await query.edit_message_text("❌ Класс не найден")
+        return
+    
+    # Используем вашу существующую функцию format_class_detail
     try:
+        text, markup = format_class_detail(class_key, section=section, page=page)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    except Exception:
-        pass  # Сообщение не изменилось
+    except Exception as e:
+        print(f"❌ Ошибка при форматировании класса: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при загрузке информации о классе")
+
+
+async def class_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик для возврата к списку классов"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "class_page_1":
+        text, markup = build_classes_simple_page()
+        await query.answer()
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            pass  # Сообщение не изменилось
 
 
 # ========== ОБРАБОТЧИКИ ДЛЯ СОЗДАНИЯ ПЕРСОНАЖЕЙ ==========
@@ -1868,6 +2507,52 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         parts = data.replace("char_saved_ability_page_", "").rsplit("_", 1)
         char_id = parts[0]
         page = int(parts[1])
+
+    # Использовать способность (уменьшить uses_remaining)
+    if data.startswith("char_use_grant_"):
+        rest = data.replace("char_use_grant_", "")
+        # Используем rsplit, чтобы корректно обрабатывать char_id содержащие '_' (например, timestamp)
+        parts = rest.rsplit("_", 2)
+        if len(parts) < 2:
+            await query.answer("Неверные данные для использования способности.")
+            return
+        char_id = parts[0]
+        grant_id = parts[1]
+        ability_idx = int(parts[2]) if len(parts) > 2 else 0
+
+        character = get_character_by_id(user_id, char_id)
+        if not character:
+            await query.edit_message_text("❌ Персонаж не найден.")
+            return
+
+        grant = character.granted_abilities.get(grant_id)
+        if not grant:
+            await query.answer("Грант не найден.")
+            return
+
+        if grant.get("uses_remaining") is None:
+            await query.answer("Эта способность не имеет ограничений по использованию.")
+            return
+
+        if grant.get("uses_remaining", 0) <= 0:
+            await query.answer("Нет доступных использований. Подождите перезарядки.")
+            return
+
+        # Уменьшаем
+        grant["uses_remaining"] = max(0, grant.get("uses_remaining") - 1)
+        # Сохраняем персонажа
+        save_character(character)
+
+        # Обновляем экран детализации способности (используем ability_idx из rsplit)
+        try:
+            text, markup = cc.build_saved_ability_detail(character, ability_idx)
+        except Exception:
+            text, markup = ("✅ Использование отмечено.", None)
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()
+        return
         character = get_character_by_id(user_id, char_id)
         if not character:
             await query.edit_message_text("❌ Персонаж не найден.")
@@ -1962,7 +2647,20 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Проверяем, нужны ли дополнительные выборы
         gains = session.gains
-        
+        # Если нужно выбрать кантрипы
+        if getattr(gains, "new_cantrips", 0) and gains.new_cantrips > 0:
+            from src.level_up import build_levelup_cantrips_message
+            text, markup = build_levelup_cantrips_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        # Если нужно выбрать новые заклинания
+        if getattr(gains, "new_spells_known", 0) and gains.new_spells_known > 0:
+            from src.level_up import build_levelup_spells_message
+            text, markup = build_levelup_spells_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
         # Если есть выбор архетипа
         if gains.archetype_choice and not session.character.archetype_name:
             text, markup = build_archetype_list_message(session)
@@ -1986,7 +2684,20 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Проверяем, нужны ли дополнительные выборы
         gains = session.gains
-        
+        # Если нужно выбрать кантрипы
+        if getattr(gains, "new_cantrips", 0) and gains.new_cantrips > 0:
+            from src.level_up import build_levelup_cantrips_message
+            text, markup = build_levelup_cantrips_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        # Если нужно выбрать новые заклинания
+        if getattr(gains, "new_spells_known", 0) and gains.new_spells_known > 0:
+            from src.level_up import build_levelup_spells_message
+            text, markup = build_levelup_spells_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
         # Если есть выбор архетипа
         if gains.archetype_choice and not session.character.archetype_name:
             text, markup = build_archetype_list_message(session)
@@ -2033,6 +2744,150 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             await query.answer()
         return
+
+    # Обработка выбора конкретной опции архетипа
+    if data.startswith("char_lu_choice_"):
+        # char_lu_choice_{char_id}_{choice_idx}_{opt_idx}
+        rest = data.replace("char_lu_choice_", "")
+        parts = rest.split("_")
+        char_id = parts[0]
+        choice_idx = int(parts[1])
+        opt_idx = int(parts[2])
+
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+
+        choices = session.gains.archetype_feature_choices
+        if choice_idx >= len(choices):
+            await query.edit_message_text("❌ Неверный выбор.")
+            return
+
+        choice = choices[choice_idx]
+        options = choice.get("options", [])
+        if opt_idx >= len(options):
+            await query.edit_message_text("❌ Неверный выбор.")
+            return
+
+        selected_opt = options[opt_idx]
+        # Сохраняем выбор
+        fid = choice.get("feature_id") or choice.get("feature_name")
+        session.selected_archetype_choices.setdefault(fid, []).append(selected_opt)
+
+        # Если есть ещё выборы — показываем следующий
+        next_idx = choice_idx + 1
+        if next_idx < len(choices):
+            text, markup = build_archetype_feature_choice_message(session, next_idx)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            except Exception:
+                await query.answer()
+            return
+
+        # Все выборы сделаны — переходим к подтверждению
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    # Страницы выбора кантрипов при повышении уровня
+    if data.startswith("char_lu_cantrip_page_"):
+        page = int(data.replace("char_lu_cantrip_page_", ""))
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        from src.level_up import build_levelup_cantrips_message
+        text, markup = build_levelup_cantrips_message(session, page=page)
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()
+        return
+
+    if data.startswith("char_lu_cantrip_"):
+        idx = int(data.replace("char_lu_cantrip_", ""))
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        from src.level_up import handle_levelup_cantrip_toggle
+        text, markup = handle_levelup_cantrip_toggle(session, idx)
+        if text is None:
+            await query.answer()
+            return
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()
+        return
+
+    if data == "char_lu_cantrips_confirm":
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        gains = session.gains
+        # После выбора кантрипов — возможно нужно выбрать новые заклинания
+        if getattr(gains, "new_spells_known", 0) and gains.new_spells_known > 0:
+            from src.level_up import build_levelup_spells_message
+            text, markup = build_levelup_spells_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+        # Иначе переходим к архетипу или подтверждению
+        if gains.archetype_choice and not session.character.archetype_name:
+            text, markup = build_archetype_list_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    # Страницы выбора заклинаний при повышении уровня
+    if data.startswith("char_lu_spell_page_"):
+        page = int(data.replace("char_lu_spell_page_", ""))
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        from src.level_up import build_levelup_spells_message
+        text, markup = build_levelup_spells_message(session, page=page)
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()
+        return
+
+    if data.startswith("char_lu_spell_"):
+        idx = int(data.replace("char_lu_spell_", ""))
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        from src.level_up import handle_levelup_spell_toggle
+        text, markup = handle_levelup_spell_toggle(session, idx)
+        if text is None:
+            await query.answer()
+            return
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            await query.answer()
+        return
+
+    if data == "char_lu_spells_confirm":
+        session = lu.get_levelup_session(user_id)
+        if not session:
+            await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
+            return
+        gains = session.gains
+        if gains.archetype_choice and not session.character.archetype_name:
+            text, markup = build_archetype_list_message(session)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+        text, markup = build_levelup_confirm_message(session)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
     
     # Выбор архетипа (подтверждение)
     if data.startswith("char_lu_ar_"):
@@ -2047,12 +2902,27 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         # Находим имя архетипа по индексу
-        from .character_data import get_archetypes_for_class
+        from src.character_data import get_archetypes_for_class
         archetypes = get_archetypes_for_class(session.character.class_name)
         arch_names = list(archetypes.keys())
         
         if arch_idx < len(arch_names):
             session.selected_archetype = arch_names[arch_idx]
+            # Добавляем архетипные способности в gains, чтобы пользователь видел их в подтверждении
+            try:
+                from src.level_up import add_archetype_features_to_gains
+                add_archetype_features_to_gains(session.gains, session.character.class_name, session.selected_archetype)
+            except Exception:
+                # Не фатально — просто не показываем дополнительную информацию
+                pass
+            # Если архетип требует выбора опций (например, тотем) — показываем первый выбор
+            choices = getattr(session.gains, "archetype_feature_choices", []) or []
+            # Показываем UI выбора только если есть хотя бы одна опция
+            if any(isinstance(c.get("options"), list) and len(c.get("options")) > 0 for c in choices):
+                # Начинаем с первой опции
+                text, markup = build_archetype_feature_choice_message(session, 0)
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                return
         
         # Переходим к подтверждению
         text, markup = build_levelup_confirm_message(session)
@@ -2071,7 +2941,7 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         # Находим полное имя архетипа
-        from .character_data import get_archetypes_for_class
+        from src.character_data import get_archetypes_for_class
         archetypes = get_archetypes_for_class(session.character.class_name)
         
         for arch_name in archetypes.keys():
@@ -2091,58 +2961,31 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if not session:
             await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
             return
-        
-        # Применяем повышение уровня
-        import random
-        character = session.character
+        # Применяем повышение уровня через общую функцию (включая выборы заклинаний/кантрипов и гранты)
+        from src.level_up import apply_level_up
+        character = apply_level_up(session)
+        # calculate hp_gain for summary
         gains = session.gains
-        
-        # Повышаем уровень
-        character.level = gains.new_level
-        from .character_data import get_proficiency_bonus
-        character.proficiency_bonus = get_proficiency_bonus(character.level)
-        
-        # Добавляем хиты
         if session.hp_choice == "average":
             hp_gain = gains.hp_roll_options[0] + character.con_mod
-        else:  # roll
+        else:
+            import random
             dice = gains.hp_roll_options[1]
             hp_gain = random.randint(1, dice) + character.con_mod
-        
-        hp_gain = max(1, hp_gain)  # минимум 1 HP
-        character.max_hp += hp_gain
-        character.current_hp = character.max_hp
-        character.hit_dice_remaining = character.level
-        
-        # Добавляем новые способности
-        for feature in gains.new_features:
-            character.features.append({
-                "level": gains.new_level,
-                "name": feature.get("name", ""),
-                "description": feature.get("description", "")
-            })
-        
-        # Применяем архетип
-        if session.selected_archetype:
-            character.archetype_name = session.selected_archetype
-        
-        # Обновляем информацию о заклинаниях
-        character.update_spell_info()
-        
+        hp_gain = max(1, hp_gain)
+
         # Сохраняем персонажа
         save_character(character)
-        
+
         # Удаляем сессию
         lu.delete_levelup_session(user_id)
-        
+
         text = f"🎉 <b>{character.name} повышен до {character.level} уровня!</b>\n\n"
         text += f"❤️ HP: +{hp_gain} (всего: {character.max_hp})\n"
-        
-        if gains.new_features:
+        if session.gains.new_features:
             text += "\n<b>Новые способности:</b>\n"
-            for feature in gains.new_features:
+            for feature in session.gains.new_features:
                 text += f"• {feature.get('name', 'Способность')}\n"
-        
         if session.selected_archetype:
             text += f"\n🎭 <b>Архетип:</b> {session.selected_archetype}"
         
@@ -2215,145 +3058,55 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("Информация о текущей странице")
         return
 
-
-async def class_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик клика на класс - показ деталей"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Проверяем формат callback_data
-    if query.data.startswith("cls_"):
-        # Это запрос на детальную секцию (новый формат: cls_{id}_{section}_{page})
-        data_parts = query.data.replace("cls_", "").split("_")
-        if len(data_parts) >= 3:
-            short_id = data_parts[0]
-            section_code = data_parts[1]
-            try:
-                page = int(data_parts[2])
-            except ValueError:
-                page = 1
-            
-            # Расшифровываем код секции
-            section_map = {
-                "a": "abilities",
-                "r": "archetypes", 
-                "q": "quick_start",
-                "m": "main"
-            }
-            section = section_map.get(section_code)
-            
-            # Если это не известная секция, ищем полное имя по коду
-            if not section:
-                # Получаем данные класса для поиска секции
-                class_key_temp = _get_class_key_from_id(short_id)
-                if class_key_temp:
-                    classes_dir = Path(__file__).parent.parent / "data_pars" / "classes"
-                    for json_file in classes_dir.glob("*.json"):
-                        try:
-                            with open(json_file, 'r', encoding='utf-8') as f:
-                                data = json.load(f)
-                                if class_key_temp in data:
-                                    class_data_temp = data[class_key_temp]
-                                    # Ищем секцию, которая начинается с этого кода
-                                    for key in class_data_temp.keys():
-                                        if key.lower().startswith(section_code.lower()):
-                                            section = key
-                                            break
-                                    break
-                        except Exception:
-                            continue
-                
-                # Если не нашли, используем код как есть
-                if not section:
-                    section = section_code
-            
-            # Получаем полный ключ класса
-            class_key = _get_class_key_from_id(short_id)
-            if not class_key:
-                await query.edit_message_text("❌ Класс не найден")
-                return
-        elif len(data_parts) == 1 and data_parts[0] == "info":
-            # Информационный callback
-            await query.answer("Информация о текущей странице")
-            return
-        else:
-            await query.edit_message_text("❌ Ошибка формата запроса")
-            return
-    elif query.data.startswith("class_"):
-        # Старый формат или запрос из списка
-        short_id = query.data.replace("class_", "")
-        class_key = _get_class_key_from_id(short_id)
-        
-        if not class_key:
-            await query.edit_message_text("❌ Класс не найден")
-            return
-        
-        section = "main"
-        page = 1
-    else:
-        await query.edit_message_text("❌ Неизвестный формат запроса")
-        return
-    
-    # Форматируем детали с пагинацией
-    detail_text, markup = format_class_detail(class_key, section=section, page=page)
-    
-    # Разбиваем если слишком длинное (на случай если всё равно не влезло)
-    try:
-        if len(detail_text) > 4096:
-            parts = split_message(detail_text, limit=4096)
-            await query.edit_message_text(parts[0], parse_mode=ParseMode.HTML, reply_markup=markup)
-            for part in parts[1:]:
-                await query.message.reply_text(part, parse_mode=ParseMode.HTML)
-        else:
-            await query.edit_message_text(detail_text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    except Exception:
-        await query.answer()  # Сообщение не изменилось
-
 def main() -> None:
-	token = get_bot_token()
-	app = ApplicationBuilder().token(token).build()
+    token = get_bot_token()
+    app = ApplicationBuilder().token(token).build()
 
-	# Register handlers for D&D helper bot
-	app.add_handler(CommandHandler("start", cmd_start))
-	app.add_handler(CommandHandler("help", cmd_help))
-	app.add_handler(CommandHandler("rules", cmd_rules))
-	app.add_handler(CommandHandler("dice", cmd_dice))
-	app.add_handler(CommandHandler("combat", cmd_combat))
-	app.add_handler(CommandHandler("stats", cmd_stats))
-	app.add_handler(CommandHandler("glossary", cmd_glossary))
-	app.add_handler(CommandHandler("races", cmd_races))
-	app.add_handler(CommandHandler("spells", cmd_spells))
-	app.add_handler(CommandHandler("classes", cmd_classes))
-	
-	# Обработчики для создания и управления персонажами
-	app.add_handler(CommandHandler("createcharacter", cmd_createcharacter))
-	app.add_handler(CommandHandler("mycharacters", cmd_mycharacters))
-	app.add_handler(CommandHandler("levelup", cmd_levelup))
-	
-	# Обработчики для создания персонажей (должны быть перед общими обработчиками)
-	app.add_handler(CallbackQueryHandler(char_callback_handler, pattern="^char_"))
-	
-	# Обработчики для просмотра рас
-	app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_page_"))
-	app.add_handler(CallbackQueryHandler(race_callback, pattern="^race_"))
-	
-	# Обработчики для заклинаний (порядок важен - более специфичные первыми)
-	app.add_handler(CallbackQueryHandler(spell_level_select_callback, pattern="^spell_level_select$"))
-	app.add_handler(CallbackQueryHandler(spell_page_callback, pattern="^spell_page_"))
-	app.add_handler(CallbackQueryHandler(spell_level_callback, pattern="^spell_level_"))
-	# Детали заклинаний - паттерн для формата spell_level_index (например: spell_1_5, spell_cantrips_12)
-	app.add_handler(CallbackQueryHandler(spell_detail_callback, pattern="^spell_(cantrips|[1-9])_\\d+$"))
-	
-	# Обработчики для классов (порядок важен - более специфичные первыми)
-	app.add_handler(CallbackQueryHandler(class_callback, pattern="^cls_"))
-	app.add_handler(CallbackQueryHandler(class_page_callback, pattern="^class_page_"))
-	app.add_handler(CallbackQueryHandler(class_callback, pattern="^class_"))
+    # Register handlers for D&D helper bot
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("rules", cmd_rules))
+    app.add_handler(CommandHandler("dice", cmd_dice))
+    app.add_handler(CommandHandler("combat", cmd_combat))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("glossary", cmd_glossary))
+    app.add_handler(CommandHandler("races", cmd_races))
+    app.add_handler(CommandHandler("spells", cmd_spells))
+    app.add_handler(CommandHandler("classes", cmd_classes))
+    
+    # Обработчики для создания и управления персонажами
+    app.add_handler(CommandHandler("createcharacter", cmd_createcharacter))
+    app.add_handler(CommandHandler("mycharacters", cmd_mycharacters))
+    app.add_handler(CommandHandler("levelup", cmd_levelup))
+    
+    # Обработчики inline-кнопок (порядок важен)
+    app.add_handler(CallbackQueryHandler(handle_inline_button, pattern="^(rules_|dice_|combat_|stats_|glossary_)"))
+    
+    # Обработчики для создания персонажей
+    app.add_handler(CallbackQueryHandler(char_callback_handler, pattern="^char_"))
+    
+    # Обработчики для рас
+    app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_page_"))
+    app.add_handler(CallbackQueryHandler(race_callback, pattern="^race_detail"))
+    app.add_handler(CallbackQueryHandler(race_page_callback, pattern="^race_detail_page_"))
+    
+    # Обработчики для заклинаний
+    app.add_handler(CallbackQueryHandler(spell_level_select_callback, pattern="^spell_level_select$"))
+    app.add_handler(CallbackQueryHandler(spell_page_callback, pattern="^spell_page_"))
+    app.add_handler(CallbackQueryHandler(spell_level_callback, pattern="^spell_level_"))
+    app.add_handler(CallbackQueryHandler(spell_detail_callback, pattern="^spell_detail_"))
+    
+    # Обработчики для классов
+    app.add_handler(CallbackQueryHandler(class_callback, pattern="^cls_"))
+    app.add_handler(CallbackQueryHandler(class_page_callback, pattern="^class_page_"))
+    app.add_handler(CallbackQueryHandler(class_callback, pattern="^class_"))
+    
+    # ОБРАБОТЧИК ВСЕХ ТЕКСТОВЫХ СООБЩЕНИЙ (включая Reply-клавиатуру)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-	app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-	print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
-	app.run_polling()
+    print("🎲 D&D Helper Bot is starting... Press Ctrl+C to stop.")
+    app.run_polling()
 
 
 if __name__ == "__main__":
-	main()
+    main()

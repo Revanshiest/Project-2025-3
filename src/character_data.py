@@ -35,7 +35,17 @@ def load_races() -> Dict:
     races_path = DATA_PATH / "races_structured.json"
     try:
         with open(races_path, 'r', encoding='utf-8') as f:
-            _races_cache = json.load(f)
+            data = json.load(f)
+            # Если JSON представлен списком, преобразуем в словарь по source_key
+            if isinstance(data, list):
+                tmp: Dict[str, Dict] = {}
+                for entry in data:
+                    key = entry.get("source_key") or entry.get("name")
+                    if key:
+                        tmp[key] = entry
+                _races_cache = tmp
+            else:
+                _races_cache = data
     except Exception as e:
         print(f"❌ Ошибка загрузки рас: {e}")
         _races_cache = {}
@@ -46,12 +56,17 @@ def get_race_names() -> List[str]:
     """Получить список названий рас (только русские названия)"""
     races = load_races()
     names = []
-    for key in races.keys():
-        # Извлекаем русское название из ключа (до английского)
+    # Предпочитаем явно заданное поле "name" в записи
+    for key, data in races.items():
+        if isinstance(data, dict):
+            name = data.get("name") or data.get("Название")
+            if name:
+                names.append(name)
+                continue
+        # Фоллбэк: извлечь русскую часть из ключа
         name = ""
         for char in key:
             if char.isupper() and name and name[-1].islower():
-                # Начинается английская часть
                 break
             name += char
         if name:
@@ -63,7 +78,13 @@ def get_race_by_name(name: str) -> Optional[Dict]:
     """Получить данные расы по названию"""
     races = load_races()
     for key, data in races.items():
-        if key.startswith(name):
+        # Сначала сравниваем с полем name внутри данных
+        if isinstance(data, dict):
+            data_name = data.get("name") or data.get("Название")
+            if data_name and data_name == name:
+                return {"key": key, "data": data}
+        # Фоллбэк: совпадение по началу ключа
+        if key.startswith(name) or key.lower().startswith(name.lower()):
             return {"key": key, "data": data}
     return None
 
@@ -71,8 +92,12 @@ def get_race_by_name(name: str) -> Optional[Dict]:
 def get_race_key_by_name(name: str) -> Optional[str]:
     """Получить ключ расы по названию"""
     races = load_races()
-    for key in races.keys():
-        if key.startswith(name):
+    for key, data in races.items():
+        if isinstance(data, dict):
+            data_name = data.get("name") or data.get("Название")
+            if data_name and data_name == name:
+                return key
+        if key.startswith(name) or key.lower().startswith(name.lower()):
             return key
     return None
 
@@ -140,9 +165,15 @@ def load_archetypes() -> Dict[str, Dict]:
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Извлекаем название класса из имени файла (например, "Варвар-Подклассы.json" -> "варвар")
-                class_name = json_file.stem.split("-")[0].lower()
-                _archetypes_cache[class_name] = data
+                # Извлекаем ключ класса из имени файла.
+                # Файлы называются например 'barbarian_archetypes.json' — удаляем суффикс '_archetypes'
+                stem = json_file.stem.lower()
+                if stem.endswith("_archetypes"):
+                    class_key = stem.replace("_archetypes", "")
+                else:
+                    # Фоллбэк: берём первую часть, разделённую через '-' или '_'
+                    class_key = stem.split("-")[0].split("_")[0]
+                _archetypes_cache[class_key] = data
         except Exception as e:
             print(f"❌ Ошибка загрузки архетипов {json_file.name}: {e}")
     
@@ -173,9 +204,15 @@ def get_archetypes_for_class(class_name: str) -> Dict:
         "warlock": "колдун",
         "wizard": "волшебник"
     }
-    
-    if class_name_lower in en_to_ru:
-        return archetypes.get(en_to_ru[class_name_lower], {})
+    # Попробуем распознать русское имя класса, преобразовав в английский ключ
+    ru_to_en = {v: k for k, v in en_to_ru.items()}
+    if class_name_lower in ru_to_en:
+        return archetypes.get(ru_to_en[class_name_lower], {})
+
+    # Ещё: если передали английское имя с суффиксом (например, 'barbarian_archetypes'), убираем суффикс
+    if class_name_lower.endswith("_archetypes"):
+        base = class_name_lower.replace("_archetypes", "")
+        return archetypes.get(base, {})
     
     return {}
 
