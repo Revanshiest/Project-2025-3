@@ -1389,9 +1389,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     response = ollama_client.generate_response(
         user_message=user_message,
         section_name=section_name,
-        section_content=section_content,
-        use_rag=use_rag,
-        rag_section_type=rag_section_type
+        section_content=section_content
     )
 
     if response:
@@ -2961,31 +2959,58 @@ async def char_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if not session:
             await query.edit_message_text("❌ Сессия повышения уровня не найдена.")
             return
-        # Применяем повышение уровня через общую функцию (включая выборы заклинаний/кантрипов и гранты)
-        from src.level_up import apply_level_up
-        character = apply_level_up(session)
-        # calculate hp_gain for summary
+        
+        # Применяем повышение уровня
+        import random
+        character = session.character
         gains = session.gains
+        
+        # Повышаем уровень
+        character.level = gains.new_level
+        from src.character_data import get_proficiency_bonus
+        character.proficiency_bonus = get_proficiency_bonus(character.level)
+        
+        # Добавляем хиты
         if session.hp_choice == "average":
             hp_gain = gains.hp_roll_options[0] + character.con_mod
-        else:
-            import random
+        else:  # roll
             dice = gains.hp_roll_options[1]
             hp_gain = random.randint(1, dice) + character.con_mod
-        hp_gain = max(1, hp_gain)
-
+        
+        hp_gain = max(1, hp_gain)  # минимум 1 HP
+        character.max_hp += hp_gain
+        character.current_hp = character.max_hp
+        character.hit_dice_remaining = character.level
+        
+        # Добавляем новые способности
+        for feature in gains.new_features:
+            character.features.append({
+                "level": gains.new_level,
+                "name": feature.get("name", ""),
+                "description": feature.get("description", "")
+            })
+        
+        # Применяем архетип
+        if session.selected_archetype:
+            character.archetype_name = session.selected_archetype
+        
+        # Обновляем информацию о заклинаниях
+        character.update_spell_info()
+        
         # Сохраняем персонажа
         save_character(character)
-
+        
         # Удаляем сессию
         lu.delete_levelup_session(user_id)
-
+        
         text = f"🎉 <b>{character.name} повышен до {character.level} уровня!</b>\n\n"
         text += f"❤️ HP: +{hp_gain} (всего: {character.max_hp})\n"
-        if session.gains.new_features:
+        
+        if gains.new_features:
             text += "\n<b>Новые способности:</b>\n"
-            for feature in session.gains.new_features:
+            for feature in gains.new_features:
                 text += f"• {feature.get('name', 'Способность')}\n"
+        
         if session.selected_archetype:
             text += f"\n🎭 <b>Архетип:</b> {session.selected_archetype}"
         
