@@ -94,20 +94,20 @@ export function ChatHistoryPage() {
     <div className="min-h-screen bg-[#1A1A1A] pt-24 pb-16">
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="font-['Cormorant_Garamond',serif] font-bold text-[#F4EBD0]" style={{ fontSize: 'clamp(3rem, 8vw, 4rem)', lineHeight: 1.2 }}>
+        <div className="text-center mb-8 sm:mb-12">
+          <h1 className="font-['Cormorant_Garamond',serif] font-bold text-[#F4EBD0]" style={{ fontSize: 'clamp(2.5rem, 8vw, 4rem)', lineHeight: 1.2 }}>
             История <span className="text-[#D4AF37]">Чатов</span>
           </h1>
-          <p className="font-['Lora',serif] text-[#F4EBD0]/70 text-lg mt-4 max-w-2xl mx-auto">
+          <p className="font-['Lora',serif] text-[#F4EBD0]/70 text-base sm:text-lg mt-4 max-w-2xl mx-auto">
             Ваши беседы с ИИ-мастером и сохраненные истории приключений
           </p>
           <div className="w-16 h-1 bg-[#D4AF37] mx-auto mt-6 opacity-60" />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Chat List */}
-          <div className="lg:col-span-4">
-            <div className="relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-6 shadow-2xl overflow-hidden group hover:border-[#D4AF37]/50 transition-all duration-500">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8">
+          {/* Chat List — on mobile, hidden when a chat is selected */}
+          <div className={`lg:col-span-4 ${selectedChat ? 'hidden lg:block' : 'block'}`}>
+            <div className="relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-5 sm:p-6 shadow-2xl overflow-hidden group hover:border-[#D4AF37]/50 transition-all duration-500">
               <div className="absolute inset-0 opacity-10 bg-[url('https://images.unsplash.com/photo-1711107762183-d99536fb7d6e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtZWRpZXZhbCUyMHBhcmNobWVudCUyMHRleHR1cmUlMjBkYXJrfGVufDF8fHx8MTc3NTE0MTcyMXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral')] bg-cover mix-blend-overlay rounded-2xl" />
 
               <div className="relative z-10">
@@ -188,8 +188,17 @@ export function ChatHistoryPage() {
             </div>
           </div>
 
-          {/* Chat Content */}
-          <div className="lg:col-span-8">
+          {/* Chat Content — on mobile, shown only when a chat is selected */}
+          <div className={`lg:col-span-8 ${selectedChat ? 'block' : 'hidden lg:block'}`}>
+            {selectedChat && (
+              /* Mobile back button */
+              <button
+                onClick={() => setSelectedChat(null)}
+                className="lg:hidden mb-4 flex items-center gap-2 text-[#D4AF37] hover:text-[#F4EBD0] transition-colors font-['Lora',serif] text-sm"
+              >
+                ← Вернуться к списку
+              </button>
+            )}
             {selectedChat ? (
               <div className="relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-6 shadow-2xl overflow-hidden group hover:border-[#D4AF37]/50 transition-all duration-500">
                 <div className="absolute inset-0 opacity-10 bg-[url('https://images.unsplash.com/photo-1711107762183-d99536fb7d6e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtZWRpZXZhbCUyMHBhcmNobWVudCUyMHRleHR1cmUlMjBkYXJrfGVufDF8fHx8MTc3NTE0MTcyMXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral')] bg-cover mix-blend-overlay rounded-2xl" />

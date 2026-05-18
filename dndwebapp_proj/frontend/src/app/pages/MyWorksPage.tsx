@@ -243,21 +243,21 @@ export function MyWorksPage() {
   return (
     <div className="min-h-screen bg-[#1A1A1A] pt-24 pb-16">
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        <div className="text-center mb-12">
-          <h1 className="font-['Cormorant_Garamond',serif] font-bold text-[#F4EBD0]" style={{ fontSize: 'clamp(3rem, 8vw, 4rem)', lineHeight: 1.2 }}>
+        <div className="text-center mb-8 sm:mb-12">
+          <h1 className="font-['Cormorant_Garamond',serif] font-bold text-[#F4EBD0]" style={{ fontSize: 'clamp(2.5rem, 8vw, 4rem)', lineHeight: 1.2 }}>
             Мои <span className="text-[#D4AF37]">Работы</span>
           </h1>
-          <p className="font-['Lora',serif] text-[#F4EBD0]/70 text-lg mt-4 max-w-2xl mx-auto">
+          <p className="font-['Lora',serif] text-[#F4EBD0]/70 text-base sm:text-lg mt-4 max-w-2xl mx-auto">
             Ваши персонажи и история приключений.
           </p>
           <div className="w-16 h-1 bg-[#D4AF37] mx-auto mt-6 opacity-60" />
         </div>
 
-        <div className="flex justify-center mb-8">
+        <div className="flex justify-center mb-6 sm:mb-8">
           <div className="flex bg-[#2c2722] border border-[#D4AF37]/30 rounded-xl p-1">
             <button
               onClick={() => {setActiveTab('characters'); setSelectedCharacter(null);}}
-              className={`flex items-center gap-2 px-6 py-3 rounded-lg font-['Cormorant_Garamond',serif] font-medium transition-all duration-300 ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-['Cormorant_Garamond',serif] font-medium transition-all duration-300 text-sm sm:text-base ${
                 activeTab === 'characters'
                   ? 'bg-[#D4AF37] text-[#1A1A1A] shadow-[0_0_20px_rgba(212,175,55,0.5)]'
                   : 'text-[#F4EBD0]/70 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10'
@@ -268,7 +268,7 @@ export function MyWorksPage() {
             </button>
             <button
               onClick={() => {setActiveTab('chats'); setSelectedCharacter(null);}}
-              className={`flex items-center gap-2 px-6 py-3 rounded-lg font-['Cormorant_Garamond',serif] font-medium transition-all duration-300 ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-['Cormorant_Garamond',serif] font-medium transition-all duration-300 text-sm sm:text-base ${
                 activeTab === 'chats'
                   ? 'bg-[#D4AF37] text-[#1A1A1A] shadow-[0_0_20px_rgba(212,175,55,0.5)]'
                   : 'text-[#F4EBD0]/70 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10'
@@ -280,7 +280,7 @@ export function MyWorksPage() {
           </div>
         </div>
 
-        <div className="relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-8 sm:p-12 shadow-2xl overflow-hidden group hover:border-[#D4AF37]/50 transition-all duration-500 min-h-[400px]">
+        <div className="relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-5 sm:p-8 md:p-12 shadow-2xl overflow-hidden group hover:border-[#D4AF37]/50 transition-all duration-500 min-h-[400px]">
           <div className="absolute inset-0 opacity-10 bg-[url('https://images.unsplash.com/photo-1711107762183-d99536fb7d6e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtZWRpZXZhbCUyMHBhcmNobWVudCUyMHRleHR1cmUlMjBkYXJrfGVufDF8fHx8MTc3NTE0MTcyMXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral')] bg-cover mix-blend-overlay rounded-2xl" />
 
           <div className="relative z-10">

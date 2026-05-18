@@ -316,8 +316,8 @@ export function CreateCharacterPage() {
         </div>
 
         {/* Progress Bar */}
-        <div className="flex justify-center mb-12">
-          <div className="flex items-center gap-4">
+        <div className="flex justify-center mb-8 sm:mb-12 overflow-x-auto pb-2">
+          <div className="flex items-center gap-1 sm:gap-4 shrink-0">
             {[1, 2, 3, 4, 5, 6, 7].map((num) => {
               // Скрываем шаг 6 для немагов
               if (num === 6 && characterClass && !characterClass.is_spellcaster) return null;
@@ -325,7 +325,7 @@ export function CreateCharacterPage() {
               return (
                 <div key={num} className="flex items-center">
                   <div
-                    className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center font-['Cormorant_Garamond',serif] font-bold transition-all duration-500 ${
+                    className={`w-7 h-7 sm:w-8 sm:h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center font-['Cormorant_Garamond',serif] font-bold text-sm md:text-base transition-all duration-500 ${
                       step >= num
                         ? 'bg-[#D4AF37] text-[#1A1A1A] shadow-[0_0_20px_rgba(212,175,55,0.5)]'
                         : 'bg-[#2c2722] border-2 border-[#D4AF37]/30 text-[#D4AF37]/50'
@@ -335,7 +335,7 @@ export function CreateCharacterPage() {
                   </div>
                   {num < 7 && (
                     <div
-                      className={`w-6 md:w-12 h-1 mx-1 md:mx-2 transition-all duration-500 ${
+                      className={`w-3 sm:w-6 md:w-12 h-1 mx-0.5 sm:mx-1 md:mx-2 transition-all duration-500 ${
                         step > num ? 'bg-[#D4AF37]' : 'bg-[#D4AF37]/20'
                       }`}
                     />
@@ -555,16 +555,20 @@ export function CreateCharacterPage() {
                     {/* DND Pool for Roll and Standard */}
                     {(method === 'roll' || method === 'standard') && abilities && (
                       <div 
-                        className="text-center mb-8 p-6 border-2 border-dashed border-[#D4AF37]/30 rounded-2xl bg-[#1A1A1A]/50 min-h-[140px] flex flex-col items-center justify-center transition-all"
+                        className="text-center mb-8 p-4 sm:p-6 border-2 border-dashed border-[#D4AF37]/30 rounded-2xl bg-[#1A1A1A]/50 min-h-[100px] sm:min-h-[140px] flex flex-col items-center justify-center transition-all"
                         onDrop={handleDropOnPool}
                         onDragOver={allowDrop}
                       >
                         <p className="font-['Lora',serif] text-[#F4EBD0]/70 mb-4 text-sm tracking-wide">
                           {unassignedValues.length > 0 
-                            ? "Резерв: перетащите эти значения в слоты характеристик ниже"
-                            : "Все значения распределены. Вы можете менять их местами, перетаскивая друг на друга."}
+                            ? <>
+                                <span className="hidden sm:inline">Резерв: перетащите эти значения в слоты характеристик ниже</span>
+                                <span className="sm:hidden">Резерв: нажмите на значение в слоте характеристики, чтобы выбрать из этих чисел</span>
+                              </>
+                            : "Все значения распределены. Вы можете изменить, нажав на слот характеристики."}
                         </p>
-                        <div className="flex flex-wrap justify-center gap-4 min-h-[50px] w-full items-center">
+                        {/* Desktop: draggable chips */}
+                        <div className="hidden sm:flex flex-wrap justify-center gap-4 min-h-[50px] w-full items-center">
                           {unassignedValues.map((val, i) => (
                             <div 
                               key={`${i}-${val}`} 
@@ -577,16 +581,27 @@ export function CreateCharacterPage() {
                             </div>
                           ))}
                         </div>
+                        {/* Mobile: non-draggable chips (selection happens in stat slots) */}
+                        <div className="sm:hidden flex flex-wrap justify-center gap-2 min-h-[40px] w-full items-center">
+                          {unassignedValues.map((val, i) => (
+                            <div 
+                              key={`${i}-${val}`}
+                              className="px-4 py-2 rounded-xl bg-gradient-to-br from-[#D4AF37] to-[#B8962E] text-[#1A1A1A] font-bold text-2xl font-['Cormorant_Garamond',serif] shadow-md"
+                            >
+                              {val}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
 
                     {/* Stats Grid */}
                     {abilities && (
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-6 w-full mt-4">
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6 w-full mt-4">
                         {(Object.entries(abilities) as [keyof AbilityScores, number][]).map(([stat, value]) => (
                           <div 
                             key={stat} 
-                            className={`text-center flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border transition-all duration-300 ${
+                            className={`text-center flex flex-col items-center justify-center gap-2 sm:gap-3 p-3 sm:p-5 rounded-2xl border transition-all duration-300 ${
                               (method === 'standard' || method === 'roll') && value === 0
                                 ? "bg-[#1A1A1A]/80 border-dashed border-[#D4AF37]/50 opacity-80"
                                 : "bg-[#111]/60 border-solid border-[#D4AF37]/20 shadow-inner"
@@ -594,43 +609,83 @@ export function CreateCharacterPage() {
                             onDrop={(e) => (method === 'standard' || method === 'roll') && handleDropOnStat(e, stat)}
                             onDragOver={(method === 'standard' || method === 'roll') ? allowDrop : undefined}
                           >
-                            <label className="block font-['Lora',serif] text-[#D4AF37] text-sm uppercase tracking-widest pointer-events-none">
+                            <label className="block font-['Lora',serif] text-[#D4AF37] text-xs sm:text-sm uppercase tracking-widest pointer-events-none">
                               {abilityNames[stat]}
                             </label>
                             
                             {(method === 'standard' || method === 'roll') ? (
-                              <div 
-                                draggable={value > 0}
-                                onDragStart={(e) => value > 0 && handleDragStart(e, stat, value)}
-                                className={`w-24 h-20 flex flex-col items-center justify-center rounded-xl transition-all ${
-                                  value > 0 
-                                    ? "bg-[#D4AF37]/10 border border-[#D4AF37]/40 text-[#F4EBD0] cursor-grab active:cursor-grabbing shadow-[0_0_15px_rgba(212,175,55,0.2)] hover:border-[#D4AF37]/80 hover:bg-[#D4AF37]/20"
-                                    : "bg-[#1A1A1A] border border-dashed border-[#333] text-[#F4EBD0]/20"
-                                }`}
-                              >
-                                {value > 0 ? (
-                                  <>
+                              <>
+                                {/* Desktop: drag target */}
+                                <div 
+                                  draggable={value > 0}
+                                  onDragStart={(e) => value > 0 && handleDragStart(e, stat, value)}
+                                  className={`hidden sm:flex w-20 h-16 sm:w-24 sm:h-20 flex-col items-center justify-center rounded-xl transition-all ${
+                                    value > 0 
+                                      ? "bg-[#D4AF37]/10 border border-[#D4AF37]/40 text-[#F4EBD0] cursor-grab active:cursor-grabbing shadow-[0_0_15px_rgba(212,175,55,0.2)] hover:border-[#D4AF37]/80 hover:bg-[#D4AF37]/20"
+                                      : "bg-[#1A1A1A] border border-dashed border-[#333] text-[#F4EBD0]/20"
+                                  }`}
+                                >
+                                  {value > 0 ? (
                                     <span className="font-['Cormorant_Garamond',serif] font-bold text-4xl pointer-events-none">
                                       {value}
                                     </span>
-                                  </>
-                                ) : (
-                                  <span className="font-['Lora',serif] text-sm pointer-events-none">Перетащите сюда</span>
-                                )}
-                              </div>
+                                  ) : (
+                                    <span className="font-['Lora',serif] text-xs pointer-events-none text-center px-1">Перетащите сюда</span>
+                                  )}
+                                </div>
+                                {/* Mobile: tap-to-assign button */}
+                                <div className="sm:hidden flex flex-col items-center gap-1 w-full">
+                                  {value > 0 ? (
+                                    <button
+                                      onClick={() => {
+                                        const newPool = [...unassignedValues, value].sort((a,b) => b-a);
+                                        setUnassignedValues(newPool);
+                                        setAbilities({ ...abilities, [stat]: 0 });
+                                      }}
+                                      className="w-full py-2 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/40 text-[#F4EBD0] active:scale-95 transition-all"
+                                    >
+                                      <span className="font-['Cormorant_Garamond',serif] font-bold text-3xl">{value}</span>
+                                      <span className="block text-[#D4AF37]/60 text-xs font-['Lora',serif]">нажмите для возврата</span>
+                                    </button>
+                                  ) : (
+                                    <div className="w-full">
+                                      {unassignedValues.length > 0 ? (
+                                        <div className="flex flex-wrap gap-1 justify-center">
+                                          {unassignedValues.map((val, i) => (
+                                            <button
+                                              key={`${i}-${val}`}
+                                              onClick={() => {
+                                                const newPool = [...unassignedValues];
+                                                newPool.splice(i, 1);
+                                                setUnassignedValues(newPool.sort((a,b) => b-a));
+                                                setAbilities({ ...abilities, [stat]: val });
+                                              }}
+                                              className="px-3 py-1.5 rounded-lg bg-gradient-to-br from-[#D4AF37] to-[#B8962E] text-[#1A1A1A] font-bold text-lg font-['Cormorant_Garamond',serif] active:scale-95 transition-transform shadow-md"
+                                            >
+                                              {val}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <span className="text-[#F4EBD0]/30 font-['Lora',serif] text-xs">пусто</span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </>
                             ) : (
-                              <div className="flex items-center justify-center gap-4 mt-2">
+                              <div className="flex items-center justify-center gap-3 mt-2">
                                 <button
                                   onClick={() => updateStat(stat, -1)}
                                   disabled={
                                     (method === 'pointbuy' && value <= 8) || 
                                     (method === 'manual' && value <= 3)
                                   }
-                                  className="w-10 h-10 flex items-center justify-center rounded-full bg-[#D4AF37]/10 hover:bg-[#D4AF37]/30 text-[#D4AF37] font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed border border-[#D4AF37]/30 text-xl pb-1"
+                                  className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-[#D4AF37]/10 hover:bg-[#D4AF37]/30 text-[#D4AF37] font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed border border-[#D4AF37]/30 text-xl pb-1"
                                 >
                                   -
                                 </button>
-                                <span className="w-12 text-center font-['Cormorant_Garamond',serif] font-bold text-[#F4EBD0] text-4xl">
+                                <span className="w-10 sm:w-12 text-center font-['Cormorant_Garamond',serif] font-bold text-[#F4EBD0] text-3xl sm:text-4xl">
                                   {value}
                                 </span>
                                 <button
@@ -639,7 +694,7 @@ export function CreateCharacterPage() {
                                     (method === 'pointbuy' && (value >= 15 || pointsLeft() < getPointBuyCost(value + 1) - getPointBuyCost(value))) ||
                                     (method === 'manual' && value >= 18)
                                   }
-                                  className="w-10 h-10 flex items-center justify-center rounded-full bg-[#D4AF37]/10 hover:bg-[#D4AF37]/30 text-[#D4AF37] font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed border border-[#D4AF37]/30 text-xl pb-1"
+                                  className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-[#D4AF37]/10 hover:bg-[#D4AF37]/30 text-[#D4AF37] font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed border border-[#D4AF37]/30 text-xl pb-1"
                                 >
                                   +
                                 </button>
@@ -993,12 +1048,12 @@ export function CreateCharacterPage() {
           </div>
         </div>
 
-        {/* Navigation Buttons */}
-        <div className="flex justify-between mt-8">
+        {/* Navigation Buttons — sticky on mobile */}
+        <div className="sticky bottom-4 sm:static z-30 sm:z-auto mt-6 sm:mt-8 flex justify-between gap-3 bg-[#1A1A1A]/80 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none rounded-xl sm:rounded-none p-3 sm:p-0 shadow-[0_-4px_20px_rgba(0,0,0,0.4)] sm:shadow-none border border-[#D4AF37]/20 sm:border-0">
           <button
             onClick={handlePrev}
             disabled={step === 1}
-            className="px-6 py-3 font-['Cormorant_Garamond',serif] font-bold text-[#D4AF37] border-2 border-[#D4AF37] rounded-xl hover:bg-[#D4AF37]/10 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 sm:flex-none px-4 sm:px-6 py-3 font-['Cormorant_Garamond',serif] font-bold text-[#D4AF37] border-2 border-[#D4AF37] rounded-xl hover:bg-[#D4AF37]/10 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Назад
           </button>
@@ -1013,7 +1068,7 @@ export function CreateCharacterPage() {
                 (step === 4 && !background) ||
                 (step === 5 && (!abilities || Object.values(abilities).some(v => v === 0)))
               }
-              className="px-6 py-3 font-['Cormorant_Garamond',serif] font-bold text-[#D4AF37] border-2 border-[#D4AF37] rounded-xl hover:bg-[#D4AF37]/10 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 sm:flex-none px-4 sm:px-6 py-3 font-['Cormorant_Garamond',serif] font-bold text-[#D4AF37] border-2 border-[#D4AF37] rounded-xl hover:bg-[#D4AF37]/10 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Далее
             </button>
@@ -1021,10 +1076,10 @@ export function CreateCharacterPage() {
             <button
               onClick={handleSave}
               disabled={!abilities || isSubmitting || ((method === 'standard' || method === 'roll') && Object.values(abilities).some(v => v === 0))}
-              className="relative group px-8 py-3 font-['Cormorant_Garamond',serif] font-bold text-lg tracking-wide text-[#D4AF37] border-2 border-[#D4AF37] rounded-xl overflow-hidden transition-all duration-500 hover:shadow-[0_0_30px_rgba(212,175,55,0.5)] disabled:opacity-50"
+              className="flex-1 sm:flex-none relative group px-4 sm:px-8 py-3 font-['Cormorant_Garamond',serif] font-bold text-base sm:text-lg tracking-wide text-[#D4AF37] border-2 border-[#D4AF37] rounded-xl overflow-hidden transition-all duration-500 hover:shadow-[0_0_30px_rgba(212,175,55,0.5)] disabled:opacity-50"
             >
               <div className="absolute inset-0 bg-[#D4AF37] opacity-0 group-hover:opacity-10 transition-opacity duration-500" />
-              <span className="relative flex items-center gap-2">
+              <span className="relative flex items-center justify-center gap-2">
                 <Sparkles className="w-5 h-5" />
                 {isSubmitting ? 'Сохранение...' : 'Создать героя'}
               </span>

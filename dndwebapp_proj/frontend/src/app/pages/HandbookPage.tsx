@@ -201,9 +201,9 @@ export function HandbookPage() {
           <p className="font-['Lora',serif] text-lg text-[#F4EBD0]/70">Расшифровка древних текстов...</p>
         </div>
       ) : (
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-          {/* LEFT COLUMN: NAVIGATION LIST */}
-          <div className="md:col-span-1 bg-[#111]/70 border border-[#D4AF37]/20 rounded-2xl p-4 max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-[#D4AF37]/25 scrollbar-track-transparent">
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 items-start">
+        {/* LEFT COLUMN: NAVIGATION LIST — hidden on mobile when item selected */}
+        <div className={`md:col-span-1 bg-[#111]/70 border border-[#D4AF37]/20 rounded-2xl p-4 max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-[#D4AF37]/25 scrollbar-track-transparent ${selectedKey ? 'hidden md:block' : 'block'}`}>
             {/* Additional Sub-Tabs for Equipment */}
             {activeCategory === 'equipment' && (
               <div className="flex gap-1 mb-4 bg-[#1A1A1A] p-1 rounded-lg border border-[#D4AF37]/15">
@@ -285,8 +285,15 @@ export function HandbookPage() {
             </div>
           </div>
 
-          {/* RIGHT COLUMN: DISPLAY PANE (PARCHMENT LOOK) */}
-          <div className="md:col-span-2 relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-6 md:p-8 shadow-2xl overflow-hidden min-h-[400px]">
+        {/* RIGHT COLUMN: DISPLAY PANE — on mobile, shows only when item selected */}
+        <div className={`md:col-span-2 relative bg-gradient-to-br from-[#2c2722] to-[#1e1a17] border border-[#D4AF37]/30 rounded-2xl p-5 md:p-8 shadow-2xl overflow-hidden min-h-[400px] ${selectedKey ? 'block' : 'hidden md:block'}`}>
+          {/* Mobile back-to-list button */}
+          <button
+            onClick={() => setSelectedKey('')}
+            className="md:hidden mb-4 flex items-center gap-2 text-[#D4AF37] hover:text-[#F4EBD0] transition-colors font-['Lora',serif] text-sm"
+          >
+            ← Назад к списку
+          </button>
             {/* Subtle parchment background texture overlay */}
             <div className="absolute inset-0 opacity-10 bg-[url('https://images.unsplash.com/photo-1711107762183-d99536fb7d6e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtZWRpZXZhbCUyMHBhcmNobWVudCUyMHRleHR1cmUlMjBkYXJrfGVufDF8fHx8MTc3NTE0MTcyMXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral')] bg-cover mix-blend-overlay rounded-2xl" />
 
