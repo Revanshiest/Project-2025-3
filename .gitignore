@@ -2,6 +2,19 @@
 __pycache__
 active_users.json
 logs/
-.venv
-data/characters/
-data/drafts/
+.venv/
+.venv/Lib/
+.venv/Scripts/
+.venv/pyvenv.cfg
+dndwebapp_proj/backend/data/characters/
+dndwebapp_proj/backend/data/chats/
+ImplementationPlan.md
+
+# Frontend
+**/node_modules/
+**/dist/
+.eslintcache
+
+# OS files
+.DS_Store
+Thumbs.db
