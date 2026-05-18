@@ -11,6 +11,8 @@ class RAGOrchestrator:
     Класс для координации RAG-процесса (Retrieval-Augmented Generation).
     Отвечает только за логику оркестрации, сборку промптов и разбор ответов (Single Responsibility).
     Зависит исключительно от абстракций (Dependency Inversion Principle).
+    
+    Поддерживает graceful degradation: работает в режиме "только LLM" если RAG недоступна.
     """
     
     MANUAL_SECTIONS = [
@@ -21,17 +23,21 @@ class RAGOrchestrator:
         self,
         llm_service: LLMService,
         embedding_service: EmbeddingService,
-        vector_repository: VectorRepository
+        vector_repository: Optional[VectorRepository] = None
     ):
         self.llm_service = llm_service
         self.embedding_service = embedding_service
         self.vector_repository = vector_repository
+        self.rag_available = vector_repository is not None
+        
+        if not self.rag_available:
+            logger.warning("⚠️ RAG недоступна, будем работать в режиме 'только LLM'")
 
     def _build_rag_tools_description(self, rag_db_types: List[str]) -> str:
         """Собирает описание RAG-инструментов для первого промпта."""
         return f"""
-Если вопрос пользователя относится к разделам: {', '.join('/' + s for s in self.MANUAL_SECTIONS)}, отвечай только на основе предоставленного контента раздела (не используй rag_request).
-Если вопрос пользователя НЕ относится к этим разделам, но касается темы, по которой есть векторная база данных (RAG) — а именно: {', '.join(rag_db_types)} — ты ОБЯЗАН сначала запросить данные из этой базы (через rag_request), а уже затем дать ответ пользователю.
+Если вопрос пользователя относится к разделам: {', '.join('/' + s for s in self.MANUAL_SECTIONS)}, отвечай только на основе предоставленного контекста.
+Если вопрос пользователя НЕ относится к этим разделам, но касается темы, по которой есть векторная база данных, запроси её через специальный JSON формат.
 Формат запроса:
 {{
     "rag_request": {{
@@ -41,7 +47,7 @@ class RAGOrchestrator:
 }}
 Если вопрос не относится ни к одной из этих тем — отвечай обычным текстом.
 
-ОФОРМЛЯЙ все ответы в html-формате (используй <b>, <i>, <br> и другие html-теги для выделения, абзацев и списков, не используй ** или __ для выделения).
+ОФОРМЛЯЙ все ответы в html-формате (используй <b>, <i>, <br> и другие html-теги для выделения, абзацев и списков, не используй markdown).
 
 Пример:
 Вопрос пользователя: "Расскажи подробнее про расу эльфов?"
@@ -69,9 +75,9 @@ class RAGOrchestrator:
 {rag_tools_description}
 
 ИНСТРУКЦИИ:
-1. Если вопрос пользователя относится к теме, по которой есть векторная БД (см. выше), всегда сначала верни JSON с rag_request (см. пример выше), а затем дай ответ, используя полученные данные.
+1. Если вопро�� пользователя относится к теме, по которой есть векторная БД (см. выше), всегда сначала верни JSON.
 2. Если вопрос пользователя не относится ни к одной из этих тем — ответь кратко, понятно и дружелюбно на русском.
-3. Если вопрос НЕ об этом разделе — предложи открыть соответствующий раздел (укажи его название) НАЗВАНИЯ РАЗДЕЛОВ(/races — список доступных рас, /classes — список классов персонажей, /rules — основные правила D&D, /dice — всё о бросках кубиков, /combat — правила боя для новичков, /spells — базовая информация о заклинаниях, /glossary — словарь терминов D&D, /stats — объяснение характеристик).
+3. Если вопрос НЕ об этом разделе — предложи открыть соответствующий раздел (укажи его название).
 4. Всегда приводи примеры из D&D когда это уместно.
 
 Вопрос пользователя:
@@ -132,18 +138,44 @@ class RAGOrchestrator:
     ) -> Optional[str]:
         """
         Генерирует ответ от модели, позволяя ей обращаться к RAG при необходимости.
+        Если RAG недоступна, работает в режиме "только LLM".
         """
-        rag_db_types = self.vector_repository.list_clients()
-        rag_tools_description = self._build_rag_tools_description(rag_db_types)
-        prompt = self._build_initial_prompt(
-            user_message, section_name, section_content, rag_tools_description
-        )
-
         try:
+            # Если RAG недоступна, используем упрощённый режим
+            if not self.rag_available:
+                logger.debug("Используем режим 'только LLM' (RAG недоступна)")
+                prompt = f"""Ты помощник по D&D для новичков.
+
+КОНТЕКСТ ТЕКУЩЕГО РАЗДЕЛА "{section_name}":
+{section_content}
+
+---
+
+ИНСТРУКЦИИ:
+1. Ответь кратко, понятно и дружелюбно на русском.
+2. Приводи примеры из D&D когда это уместно.
+3. Оформляй ответ в html-формате (<b>, <i>, <br> и т.д.).
+4. Ответ не должен превышать 1024 символа.
+
+Вопрос пользователя:
+{user_message}
+
+Ответ:"""
+                answer = self.llm_service.generate(prompt)
+                return answer if answer else "Извините, не удалось обработать вопрос."
+            
+            # --- РЕЖИМ С RAG ---
+            rag_db_types = self.vector_repository.list_clients()
+            rag_tools_description = self._build_rag_tools_description(rag_db_types)
+            prompt = self._build_initial_prompt(
+                user_message, section_name, section_content, rag_tools_description
+            )
+
             # Первый вызов к LLM
             answer = self.llm_service.generate(prompt)
             if answer is None:
-                return None
+                logger.warning("LLM вернул None на первый запрос")
+                return "Извините, не удалось получить ответ от ИИ."
 
             # Пробуем разобрать JSON-ответ для RAG-запроса
             rag_req = self._try_parse_rag_request(answer)
@@ -152,29 +184,36 @@ class RAGOrchestrator:
                 rag_query = rag_req.get("query")
                 logger.debug("RAG-запрос: type=%s, query=%s", db_type, rag_query)
 
-                # Генерируем эмбеддинг для поиска
-                query_embedding = self.embedding_service.embed_query(rag_query)
+                try:
+                    # Генерируем эмбеддинг для поиска
+                    query_embedding = self.embedding_service.embed_query(rag_query)
 
-                # Получаем контекст из репозитория
-                rag_context = self.vector_repository.retrieve_context(
-                    rag_query, db_type, query_embedding
-                )
+                    # Получаем контекст из репозитория
+                    rag_context = self.vector_repository.retrieve_context(
+                        rag_query, db_type, query_embedding
+                    )
 
-                prompt2 = self._build_rag_followup_prompt(
-                    user_message, section_name, section_content, db_type, rag_context
-                )
+                    prompt2 = self._build_rag_followup_prompt(
+                        user_message, section_name, section_content, db_type, rag_context
+                    )
 
-                # Второй вызов к LLM с контекстом RAG
-                final_answer = self.llm_service.generate(prompt2)
-                if final_answer is not None:
-                    return final_answer
-                else:
-                    return "Ошибка генерации ответа после RAG-запроса."
+                    # Второй вызов к LLM с контекстом RAG
+                    final_answer = self.llm_service.generate(prompt2)
+                    if final_answer is not None:
+                        return final_answer
+                    else:
+                        logger.warning("LLM вернул None на RAG-запрос, возвращаем исходный ответ")
+                        return answer
+                except Exception as rag_error:
+                    logger.warning("Ошибка при выполнении RAG-запроса, возвращаем исходный ответ: %s", rag_error)
+                    # Fallback на исходный ответ, если RAG не сработал
+                    return answer
 
             return answer
-        except OllamaConnectionError:
-            logger.error("Не удалось подключиться к LLM-сервису")
-            return None
+            
+        except OllamaConnectionError as e:
+            logger.error("❌ Ошибка подключения к Ollama: %s", e)
+            return "Ошибка: Ollama недоступна. Пожалуйста, убедитесь, что сервис запущен."
         except Exception as e:
-            logger.error("Ошибка в RAG-оркестраторе: %s", e)
-            return None
+            logger.error("❌ Ошибка в RAG-оркестраторе: %s", e, exc_info=True)
+            return f"Ошибка обработки: {str(e)[:100]}"
