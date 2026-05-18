@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # Основной веб-сервер (FastAPI + React)
+  web:
+    build:
+      context: ./dndwebapp_proj
+      dockerfile: Dockerfile
+    container_name: dnd_web_app
+    ports:
+      - "80:8000" # Наш сайт будет доступен прямо на 80 порту домена dndhelper.ru!
+    environment:
+      - DEBUG=False
+      - OLLAMA_HOST=http://ollama:11434 # Указываем бэкенду адрес контейнера Ollama
+      - OLLAMA_LLM_MODEL="gpt-oss:120b-cloud" # Модель по умолчанию (легковесная и мощная для VPS)
+      - CORS_ORIGINS=["http://dndhelper.ru", "https://dndhelper.ru", "http://localhost"]
+    volumes:
+      - ./dndwebapp_proj/backend/data/characters:/app/backend/data/characters # Сохраняем карточки персонажей на диске хоста
+      - ./dndwebapp_proj/backend/data/chats:/app/backend/data/chats # Сохраняем сессии чатов
+    depends_on:
+      - ollama
+    restart: always
+
+  # Локальный ИИ-сервер Ollama
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dnd_ollama_ai
+    volumes:
+      - ollama_data:/root/.ollama # Кэшируем скачанные ИИ-модели на диске хоста, чтобы они не удалялись при перезапуске
+    restart: always
+
+volumes:
+  ollama_data:

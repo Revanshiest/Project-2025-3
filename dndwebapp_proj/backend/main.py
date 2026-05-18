@@ -27,13 +27,36 @@ app.include_router(reference.router)
 app.include_router(characters.router)
 app.include_router(ai.router)
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to D&D Helper API"}
-
 @app.get("/api/v1/health")
 async def health_check():
     return {"status": "ok"}
+
+import os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# Путь к скомпилированному фронтенду
+frontend_dist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist")
+
+if os.path.exists(frontend_dist_path):
+    # Раздаем папку с ассетами (JS, CSS, картинки)
+    assets_path = os.path.join(frontend_dist_path, "assets")
+    if os.path.exists(assets_path):
+        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+
+    # Для всех остальных путей отдаем index.html (React Router на клиенте)
+    @app.get("/{catchall:path}")
+    async def serve_spa(catchall: str):
+        # Если запрошен конкретный файл, отдаем его
+        file_path = os.path.join(frontend_dist_path, catchall)
+        if catchall and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        # Иначе отдаем index.html для роутинга на стороне клиента (React SPA)
+        return FileResponse(os.path.join(frontend_dist_path, "index.html"))
+else:
+    @app.get("/")
+    async def root():
+        return {"message": "Welcome to D&D Helper API"}
 
 if __name__ == "__main__":
     uvicorn.run(
