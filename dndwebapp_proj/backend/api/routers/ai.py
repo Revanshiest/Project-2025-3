@@ -3,11 +3,13 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from uuid import uuid4
+import logging
 
 from backend.ai.rag_orchestrator import RAGOrchestrator
 from backend.api.dependencies import get_rag_orchestrator, get_chat_repo
 from backend.repositories.chat_repository import ChatRepository
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["AI"])
 
 class AIQueryRequest(BaseModel):
@@ -49,59 +51,74 @@ def ask_ai(
 ):
     """
     Задать вопрос ИИ-помощнику. 
-    Использует RAGOrchestrator (чистую архитектуру) для поиска информации и генерации.
+    Использует RAGOrchestrator с graceful degradation (работает даже без RAG).
     Также сохраняет историю запросов в ChatRepository.
     """
-    # Вычисляем или создаем chat_id
-    chat_id = request.chat_id
-    if not chat_id:
-        chat_id = f"chat_{uuid4().hex[:12]}"
+    try:
+        # Вычисляем или создаем chat_id
+        chat_id = request.chat_id
+        if not chat_id:
+            chat_id = f"chat_{uuid4().hex[:12]}"
+            
+        # Загружаем существующую сессию или создаем новую
+        existing_session = chat_repo.get_by_id(request.user_id, chat_id)
+        messages = existing_session.get("messages", []) if existing_session else []
+        title = existing_session.get("title", request.question[:30] + "...") if existing_session else (request.question[:30] + "...")
         
-    # Загружаем существующую сессию или создаем новую
-    existing_session = chat_repo.get_by_id(request.user_id, chat_id)
-    messages = existing_session.get("messages", []) if existing_session else []
-    title = existing_session.get("title", request.question[:30] + "...") if existing_session else (request.question[:30] + "...")
-    
-    # Добавляем сообщение пользователя
-    user_msg_id = f"msg_{uuid4().hex[:8]}"
-    now = datetime.now().isoformat()
-    messages.append({
-        "id": user_msg_id,
-        "sender": "user",
-        "content": request.question,
-        "timestamp": now
-    })
-    
-    # Генерируем ответ
-    answer = orchestrator.generate_response(
-        user_message=request.question,
-        section_name=request.section_name,
-        section_content=request.section_content
-    )
-    
-    if not answer:
-        raise HTTPException(status_code=500, detail="Ошибка генерации ответа")
+        # Добавляем сообщение пользователя
+        user_msg_id = f"msg_{uuid4().hex[:8]}"
+        now = datetime.now().isoformat()
+        messages.append({
+            "id": user_msg_id,
+            "sender": "user",
+            "content": request.question,
+            "timestamp": now
+        })
         
-    # Добавляем ответ ассистента
-    assistant_msg_id = f"msg_{uuid4().hex[:8]}"
-    messages.append({
-        "id": assistant_msg_id,
-        "sender": "assistant",
-        "content": answer,
-        "timestamp": datetime.now().isoformat()
-    })
-    
-    # Сохраняем сессию
-    chat_repo.save_chat_session(
-        user_id=request.user_id,
-        chat_id=chat_id,
-        title=title,
-        messages=messages,
-        is_active=True
-    )
-    
-    return {
-        "answer": answer,
-        "chat_id": chat_id,
-        "title": title
-    }
+        # Генерируем ответ (с graceful fallback)
+        answer = orchestrator.generate_response(
+            user_message=request.question,
+            section_name=request.section_name,
+            section_content=request.section_content
+        )
+        
+        # Если всё же ответ пустой (маловероятно), возвращаем ошибку
+        if not answer or answer.strip() == "":
+            logger.error("Пустой ответ от orchestrator")
+            raise HTTPException(
+                status_code=503, 
+                detail="ИИ-сервис временно недоступен. Пожалуйста, попробуйте позже."
+            )
+            
+        # Добавляем ответ ассистента
+        assistant_msg_id = f"msg_{uuid4().hex[:8]}"
+        messages.append({
+            "id": assistant_msg_id,
+            "sender": "assistant",
+            "content": answer,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Сохраняем сессию
+        chat_repo.save_chat_session(
+            user_id=request.user_id,
+            chat_id=chat_id,
+            title=title,
+            messages=messages,
+            is_active=True
+        )
+        
+        return {
+            "answer": answer,
+            "chat_id": chat_id,
+            "title": title
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Неожиданная ошибка в /ask: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Внутренняя ошибка сервера: {str(e)[:50]}"
+        )
