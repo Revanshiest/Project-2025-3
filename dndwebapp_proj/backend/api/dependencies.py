@@ -4,12 +4,14 @@ from backend.repositories.character_repository import CharacterRepository
 from backend.repositories.chat_repository import ChatRepository
 from backend.services.character_service import CharacterService
 from backend.services.level_up_service import LevelUpService
+import logging
 
 # AI Сервисы
 from backend.ai.ollama_client import OllamaLLMService, OllamaEmbeddingService
 from backend.ai.chroma_repository import ChromaVectorRepository
 from backend.ai.rag_orchestrator import RAGOrchestrator
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Глобальные экземпляры сервисов для простоты и переиспользования
@@ -45,10 +47,18 @@ embedding_service = OllamaEmbeddingService(
     base_url=settings.ollama_host,
     model=settings.ollama_embedding_model,
 )
-vector_repo = ChromaVectorRepository(
-    db_path=settings.vector_db_path,
-    embedding_service=embedding_service,
-)
+
+# Инициализация ChromaDB с graceful fallback
+vector_repo = None
+try:
+    vector_repo = ChromaVectorRepository(
+        db_path=settings.vector_db_path,
+        embedding_service=embedding_service,
+    )
+    logger.info("✅ ChromaDB инициализирована успешно")
+except Exception as e:
+    logger.warning("⚠️ Ошибка инициализац��и ChromaDB, работаем без RAG: %s", e)
+    vector_repo = None
 
 rag_orchestrator = RAGOrchestrator(
     llm_service=llm_service,
