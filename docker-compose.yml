@@ -25,8 +25,12 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: dnd_ollama_ai
+    ports:
+      - "11434:11434" # Пробрасываем порт, чтобы общаться с ИИ
+    environment:
+      - OLLAMA_API_KEY=ваш_api_ключ_из_аккаунта_ollama # Ваш ключ для работы с облаком
     volumes:
-      - ollama_data:/root/.ollama # Кэшируем скачанные ИИ-модели на диске хоста, чтобы они не удалялись при перезапуске
+      - ollama_data:/root/.ollama # Кэшируем скачанные ИИ-модели на диске хоста
     restart: always
 
 volumes:
