@@ -12,7 +12,6 @@ ImplementationPlan.md
 
 # Frontend
 **/node_modules/
-**/dist/
 .eslintcache
 
 # OS files
